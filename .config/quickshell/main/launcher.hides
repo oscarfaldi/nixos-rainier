@@ -1,0 +1,24 @@
+# Applications that never show up in the launcher.
+#
+# One desktop id per line, `#` starts a comment. Nix turns every line into a tombstone
+# (~/.local/share/applications/<id> with Hidden=true), so GIO and anything else on
+# the machine hides the same set. Add a line, rebuild, done - no .desktop file to write.
+
+base.desktop
+blackmagicraw-player.desktop
+blackmagicraw-speedtest.desktop
+btop.desktop
+cups.desktop
+davinci-control-panels-setup.desktop
+davinci.desktop
+davinci-fairlight-studio-utility.desktop
+davinci-resolve.desktop
+draw.desktop
+math.desktop
+nixos-manual.desktop
+nm-connection-editor.desktop
+nvidia-settings.desktop
+startcenter.desktop
+tectonic.desktop
+thunar-settings.desktop
+yazi.desktop

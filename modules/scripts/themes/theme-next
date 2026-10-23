@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+
+# ============================================================
+# Theme Next
+#
+# Ctrl+Shift+Tab. Applies the NEXT theme in the list - palette, wallpaper and everything theme-apply
+# owns - so switching is one keypress instead of opening the menu and picking a row.
+#
+# The list comes from theme-list, which already merges user themes over the official ones, so a theme
+# added to ~/.local/share/qs-palettes-user is reachable from the keyboard without editing anything.
+# ============================================================
+
+set -uo pipefail
+
+mapfile -t themes < <(theme-list)
+
+if (( ${#themes[@]} == 0 )); then
+    echo "theme-next: no themes found" >&2
+    exit 1
+fi
+
+current="$(theme-current)"
+
+index=-1
+for i in "${!themes[@]}"; do
+    if [[ "${themes[$i]}" == "$current" ]]; then
+        index=$i
+        break
+    fi
+done
+
+next="${themes[$(((index + 1) % ${#themes[@]}))]}"
+
+# theme-apply prints the applied name on success; nothing to add here.
+exec theme-apply "$next"

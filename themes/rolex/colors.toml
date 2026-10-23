@@ -1,0 +1,58 @@
+# Rolex - near-black green, seafoam accent, sand-gold folders.
+#
+# The premium end of the palette set: the background sits at #070d0b, dark enough that the gold
+# folders and parchment text carry the mood instead of the surface. Derived from the Hermes skin
+# engine (poseidon's seafoam ladder + the default skin's gold ladder), then pushed darker and warmer.
+display_name = "Rolex"
+
+gtk_theme = "Adwaita-dark"      # fallback only: the theme below is generated
+gtk_icons = "Papirus-Dark"      # fallback only: the icons below are generated
+
+generate_gtk = "true"
+gtk_base = "Nordic"
+generate_icons = "true"
+icons_color = "paleorange"      # Papirus' muted sand-gold folders
+
+# Popup/menu surface: a lifted green so the menus stop reading as almost-black. Sits between
+# the near-black background and the sage border, so the border still separates clearly.
+panel = "#1a2b24"
+
+mode = "dark"
+
+# Borders are two DIFFERENT muted tones on purpose: sage for the shell (launcher, popups, GTK
+# focus rings) and brass for the niri window border, so the two never read as one glowing frame.
+# #35c79f read as neon mint on near-black surfaces; these are the soft version of it. surfaces,
+# more Tron than vintage. #2f8f78 keeps the hue and drops the glow.
+accent = "#4c8272"
+selection = "#22403a"
+muted = "#45625a"
+
+background = "#070d0b"
+dark_background = "#040807"
+darker_background = "#020504"
+lighter_background = "#101c18"
+
+foreground = "#e8dfc7"
+dark_foreground = "#7c8677"
+light_foreground = "#cfc8ae"
+bright_foreground = "#f4eddb"
+
+red = "#e06c75"
+yellow = "#d9a521"
+orange = "#c98a3a"
+green = "#7fbf8f"
+cyan = "#35c79f"
+blue = "#5b9fc9"
+magenta = "#c07ea8"
+brown = "#8a6a3f"
+
+bright_red = "#ef8a91"
+bright_yellow = "#e8bf52"
+bright_green = "#9ed2ab"
+bright_cyan = "#7fe0c4"
+bright_blue = "#7fb8dd"
+bright_magenta = "#d59cc0"
+
+# Window borders: seafoam for the focused window, muted green otherwise.
+border_active = "#6fa896"
+border_inactive = "#3a5c52"

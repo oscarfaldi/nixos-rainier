@@ -1,0 +1,36 @@
+#!/bin/sh
+# Start niri, but never let a broken config lock the session out.
+#
+# Why: niri treats a config error (including an `include` whose file is missing) as fatal for the whole
+# config and silently falls back to the built-in defaults, which have NO keybinds. On a desktop whose
+# every shortcut is a niri bind, that means no terminal, no launcher, no way to fix the file - which is
+# exactly what happened once after a reinstall.
+#
+# So: validate first. If the config is good, start normally. If it is not, start niri on a minimal
+# emergency config that keeps a terminal reachable, and record why.
+set -u
+
+# greetd hands the session a minimal environment, so nothing here may rely on PATH lookup alone.
+niri_bin="$(command -v niri 2>/dev/null || echo /run/current-system/sw/bin/niri)"
+session_bin="$(command -v niri-session 2>/dev/null || echo /run/current-system/sw/bin/niri-session)"
+
+config="${XDG_CONFIG_HOME:-$HOME/.config}/niri/config.kdl"
+emergency="/etc/niri/emergency.kdl"
+log="${XDG_STATE_HOME:-$HOME/.local/state}/niri-start.log"
+
+if [ -x "$niri_bin" ] && "$niri_bin" validate -c "$config" >/dev/null 2>&1; then
+    exec "$session_bin"
+fi
+
+mkdir -p "$(dirname "$log")" 2>/dev/null || true
+{
+    echo "$(date '+%F %T') config invalid, starting the emergency config"
+    "$niri_bin" validate -c "$config" 2>&1 | tail -n 20
+} >>"$log" 2>&1
+
+# NIRI_CONFIG is read by niri itself, so this covers niri-session too.
+if [ -r "$emergency" ]; then
+    export NIRI_CONFIG="$emergency"
+fi
+
+exec "$session_bin"

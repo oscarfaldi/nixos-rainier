@@ -1,0 +1,412 @@
+#!/usr/bin/env bash
+
+set -uo pipefail
+
+# ==============================================================
+# NAS CIFS Recovery Tool
+#
+# The failure this exists for: one stale CIFS session makes every access to /mnt/nas block in the
+# kernel (uninterruptible), so Thunar freezes completely, killing it does not help, and reopening it
+# hangs again on the same dead session. Restarting the NAS "fixes" it only because it drops the
+# session.
+#
+# So the job is: find what holds the mount, force the mount away, and mount it again - in that order.
+# A lazy unmount alone (the old behaviour) leaves the dead session attached to the processes that
+# still hold it, which is why the Thunar window stayed frozen and the next open hit the same session.
+#
+#   nas-recover           recover: unblock holders, force-unmount, remount, verify
+#   nas-recover --check   diagnose only, change nothing
+# ==============================================================
+
+SHARES=(
+    academy
+    archive
+    download
+    family
+    games
+    media-music
+    media-video
+    mulino
+    oscarfaldi
+    personalbranding
+    snapshot
+    toolkit
+    valhalla
+    appdata
+)
+
+# The shares live on the 10G link. The 1G address is the fallback path to the same box.
+NAS_10G="10.10.20.10"
+NAS_1G="10.10.10.10"
+
+UMOUNT_TIMEOUT=5
+MOUNT_TIMEOUT=10
+# -k: kill with SIGKILL if the child ignores SIGTERM. Without it `timeout` waits forever on a
+# process that traps TERM, which is exactly how a `sudo umount -f` used to hang this script.
+KILL_AFTER=2
+VERIFY_TIMEOUT=4
+
+check_only=0
+[ "${1:-}" = "--check" ] && check_only=1
+
+holder_pids=()
+killed_thunar=0
+
+# ==============================================================
+# Helpers
+# ==============================================================
+
+print_header() {
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    if (( check_only )); then
+        echo " NAS CIFS Check"
+    else
+        echo " NAS CIFS Recovery"
+    fi
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo
+}
+
+mount_path() { printf '/mnt/nas/%s' "$1"; }
+
+mount_unit() { systemd-escape --path --suffix=mount "/mnt/nas/$1"; }
+
+# Reads /proc instead of running lsof: lsof itself blocks on a hung CIFS mount, which used to make
+# this script hang exactly when it was needed.
+find_holders() {
+    local p pid link fd
+
+    for p in /proc/[0-9]*; do
+        pid=${p#/proc/}
+        [ "$pid" = "$$" ] && continue
+
+        link="$(readlink "$p/cwd" 2>/dev/null || true)"
+        case "$link" in
+            /mnt/nas/*) holder_pids+=("$pid"); continue ;;
+        esac
+
+        for fd in "$p"/fd/*; do
+            link="$(readlink "$fd" 2>/dev/null || true)"
+            case "$link" in
+                /mnt/nas/*) holder_pids+=("$pid"); break ;;
+            esac
+        done
+    done
+}
+
+proc_name() { tr -d '\0' <"/proc/$1/comm" 2>/dev/null || echo "?"; }
+
+proc_state() { awk '{print $3}' "/proc/$1/stat" 2>/dev/null || echo "?"; }
+
+# ==============================================================
+# Step 0: is the box even there?
+# ==============================================================
+
+check_reachability() {
+    echo "→ [0/4] Reaching the NAS..."
+    echo
+
+    local ip label ok=0
+    for ip in "$NAS_10G" "$NAS_1G"; do
+        [ "$ip" = "$NAS_10G" ] && label="10G link" || label="1G link"
+        printf "  %-22s" "$ip ($label)"
+
+        if ping -c1 -W1 "$ip" >/dev/null 2>&1; then
+            echo "✓ replies"
+            ok=1
+        else
+            echo "✗ no reply"
+        fi
+    done
+
+    echo
+    if (( ok == 0 )); then
+        echo "  The NAS is unreachable on both addresses. Remounting cannot succeed until the link"
+        echo "  is back - check the cable/switch, then run this again."
+        echo
+        return 1
+    fi
+}
+
+# ==============================================================
+# Step 1: what is holding the dead session open?
+# ==============================================================
+
+release_holders() {
+    echo "→ [1/4] Processes holding /mnt/nas..."
+    echo
+
+    find_holders
+
+    if (( ${#holder_pids[@]} == 0 )); then
+        echo "  none"
+        echo
+        return 0
+    fi
+
+    local pid name
+    for pid in "${holder_pids[@]}"; do
+        name="$(proc_name "$pid")"
+        printf "  %-6s %-16s %s\n" "$pid" "$name" "$(proc_state "$pid")"
+        [ "$name" = "thunar" ] && killed_thunar=1
+    done
+
+    if (( check_only )); then
+        echo
+        return 0
+    fi
+
+    echo
+    echo "  Terminating them so the mount can be released..."
+
+    for pid in "${holder_pids[@]}"; do
+        kill -TERM "$pid" 2>/dev/null || true
+    done
+    sleep 1
+    for pid in "${holder_pids[@]}"; do
+        kill -KILL "$pid" 2>/dev/null || true
+    done
+    sleep 1
+
+    local survivors=0
+    for pid in "${holder_pids[@]}"; do
+        if [[ -d "/proc/$pid" ]]; then
+            printf "  %-6s %-16s still here (%s - kernel I/O wait, it clears once the mount is gone)\n" \
+                "$pid" "$(proc_name "$pid")" "$(proc_state "$pid")"
+            survivors=$((survivors + 1))
+        fi
+    done
+
+    (( survivors == 0 )) && echo "  all released"
+    echo
+}
+
+# ==============================================================
+# Step 2: force the mounts away
+# ==============================================================
+
+unmount_all() {
+    echo "→ [2/4] Force-unmounting NAS shares..."
+    echo
+
+    local share mount
+    for share in "${SHARES[@]}"; do
+        mount="$(mount_path "$share")"
+        printf "  %-20s" "$share"
+
+        if ! mountpoint -q "$mount" 2>/dev/null; then
+            echo "not mounted"
+            continue
+        fi
+
+        # Lazy first: -l detaches the mount from the namespace immediately and never waits for pending
+        # I/O, so the file manager unblocks at once. -f is only tried afterwards, because forcing a
+        # CIFS session down can block until the server answers - that is what made this script appear
+        # to freeze on the first share while it was silently waiting.
+        if timeout -k "$KILL_AFTER" "$UMOUNT_TIMEOUT" sudo -n umount -l "$mount" >/dev/null 2>&1; then
+            if mountpoint -q "$mount" 2>/dev/null; then
+                echo "✓ detached (lazy, still finishing)"
+            else
+                echo "✓ detached"
+            fi
+        elif timeout -k "$KILL_AFTER" "$UMOUNT_TIMEOUT" sudo -n umount -f -l "$mount" >/dev/null 2>&1; then
+            echo "✓ detached (forced)"
+        else
+            echo "✗ busy - close what is using it and run again"
+        fi
+    done
+    echo
+}
+
+# ==============================================================
+# Step 3: recreate
+# ==============================================================
+
+remount_all() {
+    echo "→ [3/4] Remounting NAS shares..."
+    echo
+
+    local share unit mount failed=0
+    for share in "${SHARES[@]}"; do
+        unit="$(mount_unit "$share")"
+        mount="$(mount_path "$share")"
+        printf "  %-20s" "$share"
+
+        sudo -n systemctl reset-failed "$unit" >/dev/null 2>&1 || true
+        sudo -n systemctl stop "$unit" >/dev/null 2>&1 || true
+
+        if (( check_only )); then
+            echo "skipped (--check)"
+            continue
+        fi
+
+        if timeout -k "$KILL_AFTER" "$MOUNT_TIMEOUT" sudo -n systemctl start "$unit" >/dev/null 2>&1; then
+            echo "✓ mounted"
+        else
+            echo "✗ FAILED"
+            failed=1
+        fi
+    done
+    echo
+    return "$failed"
+}
+
+# ==============================================================
+# Step 4: does it actually answer?
+# ==============================================================
+
+verify_share() {
+    local mount="$1"
+
+    mountpoint -q "$mount" 2>/dev/null || { echo "NOT MOUNTED"; return 1; }
+
+    # The probe runs in the background and is polled, because a stat on a hung CIFS mount cannot be
+    # killed - running it in the foreground is how the old script hung instead of reporting.
+    ( timeout -s KILL "$VERIFY_TIMEOUT" ls "$mount" >/dev/null 2>&1 ) &
+    local probe=$!
+
+    local i=0
+    while kill -0 "$probe" 2>/dev/null && (( i < 60 )); do
+        sleep 0.1
+        i=$((i + 1))
+    done
+
+    if kill -0 "$probe" 2>/dev/null; then
+        echo "HUNG (no answer from the server)"
+        return 1
+    fi
+
+    echo "✓ OK"
+    return 0
+}
+
+verify_all() {
+    echo "→ [4/4] Verifying..."
+    echo
+
+    local share mount failed=0
+    for share in "${SHARES[@]}"; do
+        mount="$(mount_path "$share")"
+        printf "  %-20s" "$share"
+        verify_share "$mount" || failed=1
+    done
+    echo
+    return "$failed"
+}
+
+# ==============================================================
+# Evidence: mount options and what the kernel says about CIFS
+# ==============================================================
+
+show_mount_options() {
+    echo "→ Active mount options (one share shown, they are identical)..."
+    echo
+
+    local opts
+    opts="$(findmnt -no OPTIONS /mnt/nas/download 2>/dev/null || true)"
+
+    if [[ -z "$opts" ]]; then
+        echo "  share not mounted"
+    else
+        printf '  %s\n' "$(echo "$opts" | tr ',' '\n' | grep -E '^(soft|hard|timeo|retrans|echo_interval|cache|actimeo|closetimeo)=' | paste -sd,)"
+
+        if ! echo "$opts" | grep -q 'timeo='; then
+            echo "  no timeo set: the kernel default is 60s per request before soft gives up"
+        fi
+    fi
+    echo
+}
+
+show_kernel_cifs() {
+    echo "→ Recent CIFS kernel messages..."
+    echo
+
+    local lines
+    lines="$(journalctl -k -b --no-pager 2>/dev/null | grep -i "cifs\|smb" | tail -12 || true)"
+
+    if [[ -z "$lines" ]]; then
+        echo "  none this boot"
+    else
+        printf '%s\n' "$lines" | sed 's/^/  /'
+    fi
+    echo
+}
+
+# ==============================================================
+# Main
+# ==============================================================
+
+print_header
+
+if (( check_only )); then
+    if ! check_reachability; then
+        exit 1
+    fi
+
+    release_holders
+    verify_all
+    show_mount_options
+    show_kernel_cifs
+
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo " Check only - nothing was changed."
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo
+    exit 0
+fi
+
+# One prompt, before anything else. Every later call uses `sudo -n`, so a password can never appear in
+# the middle of the loop where it looked like the script had simply frozen.
+echo "→ Sudo is needed to unmount and remount the shares."
+if ! sudo -v; then
+    echo
+    echo "  sudo was refused. Nothing was changed."
+    exit 1
+fi
+echo
+
+if ! check_reachability; then
+    exit 1
+fi
+
+release_holders
+
+if ! sudo -n true 2>/dev/null; then
+    echo "  sudo expired mid-run; run the script again." >&2
+    exit 1
+fi
+
+unmount_all
+remount_all || true
+
+echo "→ Waiting for mount state to settle..."
+sleep 1
+echo
+
+if ! verify_all; then
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo " ⚠ The client side is clean, but the NAS is still not answering."
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo
+    echo " That means the SMB service on the NAS is wedged, not the mount on this machine."
+    echo " Restart Samba on Unraid (no reboot needed):"
+    echo
+    echo "   ssh root@${NAS_1G} '/etc/rc.d/rc.samba restart'"
+    echo
+    echo " This machine has no root SSH key for the NAS, so it cannot do that for you."
+    echo
+    show_kernel_cifs
+    exit 1
+fi
+
+# Thunar keeps its own view of a dead share; restarting it is what makes the window usable again.
+if (( killed_thunar )); then
+    echo "→ Thunar was holding the dead share, starting it again..."
+    setsid -f thunar >/dev/null 2>&1 &
+    echo
+fi
+
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo " ✓ All NAS shares recovered."
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=BTOP++
+Comment=Resource Monitor
+Exec=btop-launch
+Icon=/home/oscarfaldi/System/assets/icons/desktop/btop.png
+Terminal=false
+Categories=System;Monitor;

@@ -1,0 +1,5 @@
+result
+result-*
+
+# LibreOffice writes this at runtime (thumbnails, history, last-used paths).
+.config/libreoffice/

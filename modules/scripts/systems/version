@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+
+# ============================================================
+# System Information
+# Displays basic system details including user, hostname,
+# NixOS version, and kernel version.
+# ============================================================
+
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo " Rainier System Status"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo
+
+echo "User      : $(whoami)"
+echo "Hostname  : $(hostname)"
+echo "Version   : $(nixos-version)"
+echo "Kernel    : $(uname -r)"
+echo
+
+echo "✓ System information loaded."

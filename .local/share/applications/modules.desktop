@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Modules
+Exec=modules-menu
+Terminal=false
+Icon=/home/oscarfaldi/System/assets/icons/desktop/modules.svg

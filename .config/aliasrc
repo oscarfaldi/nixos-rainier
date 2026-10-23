@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+
+# =====================================================
+# Modern CLI Helpers
+# Keep standard commands intact.
+# Troubleshooting should behave exactly as expected.
+# =====================================================
+
+# =====================================================
+# Listing & Navigation
+# =====================================================
+
+# Modern file listing
+alias l='eza --icons'
+alias ll='eza -lah --icons --git'
+alias la='eza -a --icons'
+alias lt='eza --tree --icons --level=3'
+
+# Directory shortcuts
+alias ..='cd ..'
+alias ...='cd ../..'
+alias ....='cd ../../..'
+
+# Zoxide shortcut
+alias z='zoxide query -i'
+alias j='z'
+
+# =====================================================
+# File Viewing
+# =====================================================
+
+# Bat shortcuts
+alias b='bat'
+alias bathelp='bat --plain --language=help'
+
+# =====================================================
+# Search
+# =====================================================
+
+# Fast search
+alias f='fd'
+
+# Ripgrep shortcuts
+alias rg='rg --smart-case'
+
+# =====================================================
+# Apps & System Monitoring
+# =====================================================
+
+# System info
+alias ff='fastfetch'
+
+# Check all disks available
+alias disks='lsblk -d -o TRAN,NAME,MODEL,SIZE'
+
+# SMART function through smartctl
+alias smart='sudo smartctl -a'
+
+# Process viewer
+alias bt='btop'
+
+# =====================================================
+# Cloudflare WARP / VPN
+# =====================================================
+
+alias vpn-on='warp-cli connect'
+alias vpn-off='warp-cli disconnect'
+alias vpn-status='warp-cli status'
+
+# =====================================================
+# Storage
+# =====================================================
+
+# Human-readable disk free
+alias dfh='df -h'
+
+# =====================================================
+# NixOS
+# =====================================================
+
+# Open NixOS config
+alias nixconf='cd /etc/nixos'
+
+# =====================================================
+# Git
+# =====================================================
+
+alias gs='git status'
+alias ga='git add'
+alias gc='git commit'
+alias gp='git push'
+
+alias gl='git log --oneline --graph --decorate --all'
+alias gd='git diff'
+
+# =====================================================
+# Safety
+# =====================================================
+
+# Interactive delete
+alias rm='rm -I'
+
+# =====================================================
+# Configs
+# =====================================================
+
+alias dots='cd ~/.config'
+
+# =====================================================
+# Misc
+# =====================================================
+
+alias c='clear'

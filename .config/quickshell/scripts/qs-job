@@ -1,0 +1,89 @@
+#!/bin/sh
+# qs-job - run a long conversion script and show its progress in a Quickshell window.
+#
+#   qs-job reencode-and-compress-to-hevc-mkv file.mkv
+#
+# The script runs detached (setsid) with QS_JOB_STATUS pointing at a key=value status file that the
+# job window polls; stdout/stderr go to <status>.log, which the window tails. If the shell is not
+# running the job is handed to ghostty instead, so the Thunar action never dead-ends.
+#
+# Lives next to the shell config on purpose: this is the working tree, so edits take effect on the
+# next invocation without a rebuild.
+set -u
+
+script="${1:-}"
+
+if [ -z "$script" ]; then
+    exit 0
+fi
+shift
+
+runtime="${XDG_RUNTIME_DIR:-/tmp}"
+status="$runtime/qs-job-$$.status"
+logfile="$status.log"
+pidfile="$status.pid"
+
+terminal_fallback() {
+    exec ghostty -e "$script" "$@"
+}
+
+# Same discovery as qs-popup: the pid the shell wrote at startup, and the FIFO that carries
+# commands without starting a client binary.
+state_file="$runtime/quickshell-shell.pid"
+shell_pid=""
+
+if [ -r "$state_file" ]; then
+    read -r shell_pid < "$state_file" || true
+fi
+
+[ -n "${shell_pid:-}" ] || terminal_fallback
+
+command_pipe="$runtime/quickshell-cmd-$shell_pid"
+
+# setsid here does not fork (this shell is not a process group leader), so $! is the script pid and
+# also the id of its new process group - which is what the window's cancel button signals.
+# PYTHONUNBUFFERED: a Python script writes its log into a file here, and block buffering would
+# keep the log empty until the process ends. Harmless for the shell scripts.
+QS_JOB_STATUS="$status" PYTHONUNBUFFERED=1 setsid "$script" "$@" >"$logfile" 2>&1 &
+job_pid=$!
+
+printf '%s\n' "$job_pid" > "$pidfile"
+
+# The window title has to exist BEFORE the window maps: niri picks the size rule when it opens,
+# and the rules tell a progress card apart from a report by title. The scripts write their first
+# status line immediately, so a short poll is enough (50 ms steps, max 0.5 s).
+job_title=""
+
+waited=0
+while [ "$waited" -lt 20 ]; do
+    if [ -r "$status" ]; then
+        job_title=$(sed -n 's/^title=//p' "$status" 2>/dev/null | head -1)
+        [ -n "$job_title" ] && break
+    fi
+    waited=$((waited + 1))
+    sleep 0.05
+done
+
+open_window() {
+    if [ -p "$command_pipe" ] && exec 3<>"$command_pipe"; then
+        echo "job $status|$job_title" >&3
+        exit 0
+    fi
+
+    shell_path="${HOME}/System/.config/quickshell/main"
+
+    if qs ipc --pid "$shell_pid" call shell run "job $status|$job_title" >/dev/null 2>&1; then
+        exit 0
+    fi
+
+    return 1
+}
+
+if ! open_window; then
+    # The shell appears to be up but would not open the window: never leave an invisible job
+    # running, hand it to a terminal instead.
+    kill -TERM -"$job_pid" 2>/dev/null
+    terminal_fallback
+fi
+
+exit 0

@@ -1,0 +1,41 @@
+# The owner's own Nord set (recovered from the pre-theme-system home/theme-nordic.nix). He compared
+# it against Omarchy's nord and preferred this one, so it stays - do not "upgrade" it.
+gtk_theme = "Nordic"
+gtk_icons = "Papirus-Dark"
+
+# Window border: active = focused window, inactive = everything else. Kept lighter than
+# `muted` on purpose, otherwise the border vanishes against a dark wallpaper.
+border_active = "#d8dee9"
+border_inactive = "#616e88"
+
+mode = "dark"
+
+accent = "#88c0d0"
+selection = "#3b4252"
+muted = "#4c566a"
+
+background = "#242933"
+dark_background = "#1b1f26"
+darker_background = "#191d24"
+lighter_background = "#3b4252"
+
+foreground = "#bbc3d4"
+dark_foreground = "#4c566a"
+light_foreground = "#d8dee9"
+bright_foreground = "#d8dee9"
+
+red = "#bf616a"
+yellow = "#ebcb8b"
+orange = "#be9d88"
+green = "#a3be8c"
+cyan = "#8fbcbb"
+blue = "#5e81ac"
+magenta = "#b48ead"
+brown = "#be9d88"
+
+bright_red = "#c5727a"
+bright_yellow = "#efd49f"
+bright_green = "#b1c89d"
+bright_cyan = "#9fc6c5"
+bright_blue = "#88c0d0"
+bright_magenta = "#b48ead"

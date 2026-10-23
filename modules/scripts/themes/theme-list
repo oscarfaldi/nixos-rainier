@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+
+# List available themes, one name per line.
+#
+# Two roots, user first, so a user copy shadows the official theme of the same name:
+#   ~/.local/share/qs-palettes-user/   writable (tweaks, community themes)
+#   /etc/qs-palettes/               official, read-only, shipped from the repo
+
+set -uo pipefail
+
+official="/etc/qs-palettes"
+user="$HOME/.local/share/qs-palettes-user"
+
+seen=""
+
+for dir in "$user"/* "$official"/*; do
+    [[ -f "$dir/colors.toml" ]] || continue
+
+    name="$(basename "$dir")"
+
+    case " $seen " in
+        *" $name "*) continue ;;
+    esac
+
+    seen="$seen $name"
+    printf '%s\n' "$name"
+done | sort

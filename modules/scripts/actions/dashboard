@@ -1,0 +1,646 @@
+#!/usr/bin/env python3
+"""Dashboard layout for the vertical monitor.
+
+Five niri workspaces on the secondary (rotated) monitor, each holding a fixed
+arrangement of apps. The primary monitor is never touched: every screen below
+targets one output, and the script only moves windows that belong to a screen.
+
+Each entry in SCREENS is one workspace: a row of columns, where every column
+has a width ratio and one or more windows stacked vertically with height
+ratios. A vertical split (A on top, B below) is ONE column with two windows.
+
+Why a script instead of plain window-rules: every app here is a Microsoft Edge
+PWA window, and Edge builds its Wayland app-id from the URL host plus path.
+Jellyfin, Navidrome, Unraid and qBittorrent all serve from the bare host
+10.10.10.10, so all four report the same app-id ("msedge-10.10.10.10__-Default")
+and no window-rule can tell them apart. This script tracks real window ids
+instead: it reuses the ids in the state file and only launches an app when its
+window is gone. It never closes or kills anything.
+
+Windows that do not belong to a screen are left alone: same size, same
+workspace, still open. They end up to the right of the dashboard columns,
+because the dashboard columns are indexed 1..n.
+
+Running it again is safe and cheap: a screen that still looks exactly like the
+last successful apply is skipped without touching focus or geometry.
+
+Usage:
+    dashboard            # build / repair the layout
+    dashboard --status   # print what is on the screens, change nothing
+    dashboard --arrange  # reposition known windows only, never launch
+    dashboard --forget   # drop the cached window ids and layout and exit
+"""
+
+import glob
+import hashlib
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+
+# ============================================================
+# LAYOUT (edit this block only)
+# ============================================================
+
+MON_VERTICAL = "DP-1"  # left monitor, 1440x2560, rotated 90
+
+# width  = share of the workspace width for that column
+# height = share of the workspace height for that window in a stacked column
+SCREENS = [
+    {
+        # screen 1: WhatsApp, full height
+        "output": MON_VERTICAL,
+        "workspace": 1,
+        "columns": [
+            {"width": 1.00, "windows": [("whatsapp", 1.00)]},
+        ],
+    },
+    {
+        # screen 2: Unraid on top, Hermes Agent below (45/55)
+        "output": MON_VERTICAL,
+        "workspace": 2,
+        "columns": [
+            {"width": 1.00, "windows": [("unraid", 0.45), ("hermes", 0.55)]},
+        ],
+    },
+    {
+        # screen 3: Jellyfin on top, Navidrome below (40/60)
+        "output": MON_VERTICAL,
+        "workspace": 3,
+        "columns": [
+            {"width": 1.00, "windows": [("jellyfin", 0.40), ("navidrome", 0.60)]},
+        ],
+    },
+    {
+        # screen 4: Gmail on top, qBittorrent below (40/60)
+        "output": MON_VERTICAL,
+        "workspace": 4,
+        "columns": [
+            {"width": 1.00, "windows": [("gmail", 0.40), ("torrent", 0.60)]},
+        ],
+    },
+    {
+        # screen 5: btop on top, Grafana below (50/50)
+        "output": MON_VERTICAL,
+        "workspace": 5,
+        "columns": [
+            {"width": 1.00, "windows": [("btop", 0.50), ("grafana", 0.50)]},
+        ],
+    },
+]
+
+# Launch command per app: the same Exec= line the .desktop launchers use, so
+# the apps come up exactly as they do from the app launcher.
+APPS = {
+    "whatsapp": ["microsoft-edge", "--app=https://web.whatsapp.com"],
+    "jellyfin": ["microsoft-edge", "--app=http://movies.local:8096/"],
+    "navidrome": ["microsoft-edge", "--app=http://music.local:4533/"],
+    "hermes": ["microsoft-edge", "--app=http://hermes.local:9119/"],
+    "gmail": ["microsoft-edge", "--app=https://mail.google.com"],
+    "unraid": ["microsoft-edge", "--app=http://server.local:8081/"],
+    "torrent": ["microsoft-edge", "--app=http://torrent.local:8080/"],
+    "btop": ["ghostty", "-e", "btop"],
+    "grafana": ["microsoft-edge", "--app=http://grafana.local:3050/d/rYdddlPWk/node-exporter-full/"],
+}
+
+# Move windows that are not part of a screen onto a side workspace, so every
+# dashboard workspace holds only its own apps. Off by default: leaving the
+# user's own windows untouched matters more than a tidy workspace.
+PARK_FOREIGN_WINDOWS = False
+
+# Which workspace the focus lands on when the layout is applied.
+FOCUS_AT_END = "dash-1"
+
+PAUSE = 0.12        # seconds between niri actions
+SPAWN_TIMEOUT = 25  # seconds to wait for a launched window to appear
+
+STATE_FILE = os.path.expanduser("~/.local/state/niri-dashboard.json")
+
+# ============================================================
+# niri plumbing
+# ============================================================
+
+SESSION_KEYS = (
+    "WAYLAND_DISPLAY",
+    "NIRI_SOCKET",
+    "XDG_RUNTIME_DIR",
+    "DBUS_SESSION_BUS_ADDRESS",
+    "XDG_CURRENT_DESKTOP",
+)
+
+
+def session_env():
+    """Environment that can talk to the running niri session.
+
+    Started from a niri keybind or a launcher the environment is already
+    complete; started from an SSH shell or a systemd unit it is not, so the
+    missing keys are copied out of the session processes.
+    """
+    env = dict(os.environ)
+    missing = [key for key in SESSION_KEYS if not env.get(key)]
+    if missing:
+        for pid in os.listdir("/proc"):
+            if not pid.isdigit():
+                continue
+            try:
+                with open(f"/proc/{pid}/comm") as fh:
+                    if fh.read().strip() != "niri":
+                        continue
+                with open(f"/proc/{pid}/environ", "rb") as fh:
+                    for item in fh.read().split(b"\0"):
+                        if b"=" not in item:
+                            continue
+                        key, _, value = item.partition(b"=")
+                        key = key.decode()
+                        if key in missing and key not in env:
+                            env[key] = value.decode()
+            except OSError:
+                continue
+    if not env.get("NIRI_SOCKET"):
+        socks = sorted(glob.glob(f"/run/user/{os.getuid()}/niri.wayland-*.sock"))
+        if socks:
+            env["NIRI_SOCKET"] = socks[-1]
+    if not env.get("WAYLAND_DISPLAY"):
+        # niri does not export WAYLAND_DISPLAY into its own environment, only
+        # into the children it spawns, so derive it from the compositor socket.
+        # Only the plain "wayland-N" socket is a display: the same directory
+        # holds daemon sockets and lock files that are not.
+        socks = [
+            path
+            for path in glob.glob(f"/run/user/{os.getuid()}/wayland-*")
+            if re.fullmatch(r"wayland-\d+", os.path.basename(path))
+        ]
+        if socks:
+            env["WAYLAND_DISPLAY"] = os.path.basename(sorted(socks)[-1])
+    env.setdefault("XDG_CURRENT_DESKTOP", "niri")
+    return env
+
+
+ENV = session_env()
+
+
+def niri(*args):
+    return subprocess.run(["niri", *args], env=ENV, capture_output=True, text=True)
+
+
+def act(*args):
+    result = niri("msg", "action", *args)
+    if result.returncode != 0:
+        print(f"  ! niri action {' '.join(args)}: {result.stderr.strip()}", file=sys.stderr)
+    time.sleep(PAUSE)
+    return result.returncode == 0
+
+
+def read_json(*args):
+    result = niri("msg", "--json", *args)
+    if result.returncode != 0:
+        raise SystemExit(f"niri msg --json {' '.join(args)} failed: {result.stderr.strip()}")
+    return json.loads(result.stdout or "[]")
+
+
+def windows():
+    return read_json("windows")
+
+
+def workspaces():
+    return read_json("workspaces")
+
+
+def connected_outputs():
+    result = niri("msg", "--json", "outputs")
+    if result.returncode != 0:
+        raise SystemExit(f"cannot list outputs: {result.stderr.strip()}")
+    return set(json.loads(result.stdout or "{}").keys())
+
+
+def check_outputs():
+    """Refuse to run when a target monitor is unplugged.
+
+    Without this the script would happily move windows around on whatever
+    output happens to sit at the same index, which is how a layout ends up on
+    the wrong screen after the monitor is switched off.
+    """
+    missing = sorted({screen["output"] for screen in SCREENS} - connected_outputs())
+    if missing:
+        raise SystemExit(f"monitor not connected: {', '.join(missing)} - nothing was changed")
+
+
+# ============================================================
+# state
+# ============================================================
+
+
+def load_state():
+    try:
+        with open(STATE_FILE) as fh:
+            raw = json.load(fh)
+    except (OSError, ValueError):
+        raw = {}
+    if "windows" not in raw:
+        # Older flat state file: every key was an app name mapped to a window id.
+        raw = {"windows": {k: v for k, v in raw.items() if isinstance(v, int)}, "layout": {}}
+    raw.setdefault("layout", {})
+    return raw
+
+
+def save_state(state):
+    os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
+    with open(STATE_FILE, "w") as fh:
+        json.dump(state, fh, indent=2)
+
+
+# ============================================================
+# window resolution: reuse -> launch -> follow the focus -> give up
+# ============================================================
+
+
+def focused_window_id():
+    for window in windows():
+        if window["is_focused"]:
+            return window["id"]
+    return None
+
+
+def find_window(key, state, claimed):
+    """The cached window id for `key`, if that window is still open."""
+    live = {w["id"] for w in windows()}
+    cached = state["windows"].get(key)
+    if cached in live and cached not in claimed:
+        return cached
+    return None
+
+
+def launch_window(key, claimed):
+    """Launch the app and return the id of the window it brought up.
+
+    Two outcomes are normal for a PWA: a brand new window appears, or Edge
+    focuses the window that was already open. Both are handled without ever
+    closing what is on screen.
+    """
+    before = {w["id"] for w in windows()}
+    focused_before = focused_window_id()
+    subprocess.Popen(
+        APPS[key],
+        env=ENV,
+        start_new_session=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL,
+    )
+    deadline = time.time() + SPAWN_TIMEOUT
+    while time.time() < deadline:
+        time.sleep(0.3)
+        fresh = [w for w in windows() if w["id"] not in before and w["id"] not in claimed]
+        if fresh:
+            return fresh[0]["id"]
+        # Edge reuses an open PWA window instead of creating one; it focuses
+        # it, so a focus change to an unclaimed window means the app is up.
+        current = focused_window_id()
+        if current and current != focused_before and current not in claimed:
+            return current
+    return None
+
+
+# ============================================================
+# workspace handling
+# ============================================================
+
+
+def workspace_by_name(name):
+    for workspace in workspaces():
+        if workspace["name"] == name:
+            return workspace
+    return None
+
+
+def focused_workspace():
+    for workspace in workspaces():
+        if workspace["is_focused"]:
+            return workspace
+    return None
+
+
+def workspace_name_of_output(name):
+    """Output that currently owns this workspace name, or None."""
+    for workspace in workspaces():
+        if workspace["name"] == name:
+            return workspace["output"]
+    return None
+
+
+def prepare_workspace(index, screen):
+    """Return the name of this screen's workspace, creating it if needed.
+
+    Workspace indices drift: niri renumbers them as workspaces appear and
+    disappear, and it will happily rename whatever happens to be focused. So
+    the index is only ever a hint to find a workspace, never an identity — the
+    name is, and every naming step is verified against the workspace id.
+    """
+    name = f"dash-{index}"
+    output = screen["output"]
+
+    owner = workspace_name_of_output(name)
+    if owner == output:
+        return name
+    if owner is not None:
+        # A leftover from an earlier layout on the other monitor.
+        act("unset-workspace-name", name)
+
+    act("focus-monitor", output)
+    act("focus-workspace", str(screen["workspace"]))
+    current = focused_workspace()
+    if current is None or current["output"] != output:
+        raise SystemExit(f"cannot focus workspace {screen['workspace']} on {output}")
+
+    # Never take over a workspace that already belongs to a screen: renaming it
+    # would silently swap two screens' contents.
+    if (current["name"] or "").startswith(("dash-", "park-")):
+        last = max(ws["idx"] for ws in workspaces() if ws["output"] == output)
+        act("focus-workspace", str(last + 1))
+        current = focused_workspace()
+        if current is None or current["output"] != output:
+            raise SystemExit(f"cannot create a workspace on {output}")
+
+    act("set-workspace-name", name)
+    landed = workspace_by_name(name)
+    if landed is None or landed["id"] != current["id"]:
+        raise SystemExit(f"naming workspace {current['id']} as {name} did not stick")
+    return name
+
+
+def enforce_positions():
+    """Put each screen workspace at the index declared in SCREENS."""
+    for index, screen in enumerate(SCREENS, start=1):
+        name = f"dash-{index}"
+        workspace = workspace_by_name(name)
+        if workspace is None or workspace["idx"] == screen["workspace"]:
+            continue
+        act("focus-monitor", workspace["output"])
+        act("focus-workspace", name)
+        act("move-workspace-to-index", str(screen["workspace"]))
+
+    for index, screen in enumerate(SCREENS, start=1):
+        workspace = workspace_by_name(f"dash-{index}")
+        if workspace is None or workspace["idx"] != screen["workspace"]:
+            print(f"  ! dash-{index} ended up at index {workspace and workspace['idx']}",
+                  file=sys.stderr)
+
+
+def park_foreign_windows(name, keep, output):
+    """Move windows that are not part of this screen to a side workspace."""
+    target = workspace_by_name(name)
+    if target is None:
+        return
+    foreign = [
+        window
+        for window in windows()
+        if window["workspace_id"] == target["id"] and window["id"] not in keep
+    ]
+    if not foreign:
+        return
+
+    park = f"park-{output}"
+    if workspace_by_name(park) is None:
+        last = max(
+            (workspace["idx"] for workspace in workspaces() if workspace["output"] == output),
+            default=1,
+        )
+        act("focus-monitor", output)
+        act("focus-workspace", str(last + 1))
+        act("set-workspace-name", park)
+
+    for window in foreign:
+        act("move-window-to-workspace", park, "--window-id", str(window["id"]), "--focus", "false")
+    print(f"  parked {len(foreign)} other window(s) on {park}")
+
+
+# ============================================================
+# reading the current state of a screen
+# ============================================================
+
+
+def screen_columns(name):
+    """Columns of the screen workspace, left to right, as lists of window ids."""
+    target = workspace_by_name(name)
+    if target is None:
+        return []
+    columns = {}
+    for window in windows():
+        if window["workspace_id"] != target["id"]:
+            continue
+        position = window["layout"]["pos_in_scrolling_layout"]
+        if not position:
+            continue
+        columns.setdefault(position[0], []).append((position[1], window["id"]))
+    return [[wid for _, wid in sorted(column)] for _, column in sorted(columns.items())]
+
+
+def fingerprint(name, ids):
+    """Positions and tile sizes of these windows, as a comparable snapshot.
+
+    Used to skip a screen that already looks like the last successful apply,
+    so pressing the key twice does not flash workspaces and focus around.
+    """
+    target = workspace_by_name(name)
+    if target is None:
+        return None
+    snap = []
+    for window in windows():
+        if window["workspace_id"] != target["id"] or window["id"] not in ids:
+            continue
+        snap.append([
+            window["id"],
+            window["layout"]["pos_in_scrolling_layout"],
+            [round(x) for x in window["layout"]["tile_size"]],
+        ])
+    return sorted(snap)
+
+
+def describe_screen(index, screen, state):
+    """One line per screen for the status report, read from niri."""
+    name = f"dash-{index}"
+    by_id = {w["id"]: w for w in windows()}
+    parts = []
+    for column in screen["columns"]:
+        labels = []
+        for key, _ratio in column["windows"]:
+            wid = state["windows"].get(key)
+            window = by_id.get(wid)
+            if window is None:
+                labels.append(f"{key} (closed)")
+                continue
+            tile = [round(x) for x in window["layout"]["tile_size"]]
+            labels.append(f"{key} {tile[0]}x{tile[1]}")
+        parts.append(" / ".join(labels))
+    return f"{name:<7} {' | '.join(parts)}"
+
+
+# ============================================================
+# building one screen
+# ============================================================
+
+
+def stack_column(name, first, second):
+    """Put `second` directly under `first`, keeping them in one column."""
+    for _ in range(3):
+        columns = screen_columns(name)
+        first_col = next((i for i, col in enumerate(columns) if first in col), None)
+        second_col = next((i for i, col in enumerate(columns) if second in col), None)
+        if first_col is None or second_col is None:
+            return False
+        if first_col == second_col:
+            return True  # already stacked
+        if second_col == first_col + 1:
+            act("focus-window", "--id", str(first))
+            act("consume-window-into-column")
+            return True
+        # Bring the second window next to the first, then consume it.
+        act("focus-window", "--id", str(second))
+        act("move-column-to-index", str(first_col + 2))
+    print(f"  ! could not stack window {second} under {first}", file=sys.stderr)
+    return False
+
+
+def spec_hash(screen):
+    """Fingerprint of a screen's own definition.
+
+    Part of the skip check: editing SCREENS (a different ratio, a different
+    app) must re-apply the screen even though the windows on it did not move.
+    """
+    return hashlib.sha256(json.dumps(screen, sort_keys=True).encode()).hexdigest()[:16]
+
+
+def build_screen(index, screen, state, claimed, allow_spawn=True):
+    name = f"dash-{index}"
+
+    # Skip when the screen still matches the last successful apply exactly.
+    expected = set()
+    for column in screen["columns"]:
+        for key, _ratio in column["windows"]:
+            wid = state["windows"].get(key)
+            if wid is None:
+                break
+            expected.add(wid)
+    if len(expected) == sum(len(c["windows"]) for c in screen["columns"]):
+        cached = state["layout"].get(name)
+        if (
+            isinstance(cached, dict)
+            and cached.get("spec") == spec_hash(screen)
+            and fingerprint(name, expected) == cached.get("snap")
+        ):
+            claimed.update(expected)
+            print(f"screen {index}: {name} already in place")
+            return
+
+    print(f"screen {index}: {name} on {screen['output']}")
+    act("focus-workspace", name)
+
+    columns = []
+    for column in screen["columns"]:
+        slots = []
+        for key, ratio in column["windows"]:
+            win = find_window(key, state, claimed)
+            if win is None and allow_spawn:
+                act("focus-workspace", name)
+                win = launch_window(key, claimed)
+                if win is None:
+                    print(f"  ! {key}: no window came up, skipped", file=sys.stderr)
+            if win is None:
+                continue
+            claimed.add(win)
+            state["windows"][key] = win
+            act("move-window-to-workspace", name, "--window-id", str(win), "--focus", "false")
+            slots.append((key, ratio, win))
+        columns.append(dict(column, slots=slots))
+
+    placed = [slot for column in columns for slot in column["slots"]]
+    if not placed:
+        print("  (nothing to arrange)")
+        return
+
+    # 1. stack the extra windows of a column underneath its first window
+    for column in columns:
+        wins = [win for (_, _, win) in column["slots"]]
+        for second in wins[1:]:
+            stack_column(name, wins[0], second)
+
+    # 2. order the finished columns left-to-right in the declared order. Windows
+    #    that are not part of this screen end up to the right of them; they are
+    #    never closed, moved away or resized.
+    act("focus-workspace", name)
+    for position, column in enumerate(columns, start=1):
+        slots = column["slots"]
+        if not slots:
+            continue
+        act("focus-window", "--id", str(slots[0][2]))
+        act("move-column-to-index", str(position))
+
+    # 3. column widths, then window heights
+    for column in columns:
+        slots = column["slots"]
+        if not slots:
+            continue
+        act("focus-window", "--id", str(slots[0][2]))
+        act("set-column-width", f"{round(column['width'] * 100)}%")
+        for _, ratio, win in slots:
+            if len(slots) == 1:
+                act("reset-window-height", "--id", str(win))
+            else:
+                act("set-window-height", "--id", str(win), f"{round(ratio * 100)}%")
+
+    if PARK_FOREIGN_WINDOWS:
+        park_foreign_windows(name, {win for (_, _, win) in placed}, screen["output"])
+
+    time.sleep(0.3)  # let niri commit the new geometry before snapshotting it
+    state["layout"][name] = {
+        "spec": spec_hash(screen),
+        "snap": fingerprint(name, {win for (_, _, win) in placed}),
+    }
+
+
+def main(argv):
+    if "--forget" in argv:
+        try:
+            os.remove(STATE_FILE)
+            print(f"removed {STATE_FILE}")
+        except FileNotFoundError:
+            print("no state file")
+        return 0
+
+    if niri("msg", "version").returncode != 0:
+        print("niri is not reachable (is this running inside the niri session?)", file=sys.stderr)
+        return 1
+
+    check_outputs()
+    state = load_state()
+
+    if "--status" in argv:
+        print("dashboard status (nothing is changed):")
+        for index, screen in enumerate(SCREENS, start=1):
+            print("  " + describe_screen(index, screen, state))
+        return 0
+
+    allow_spawn = "--arrange" not in argv
+    claimed = set()
+
+    # Name every screen workspace before touching any window: naming is the
+    # step that can move indices around.
+    names = [prepare_workspace(index, screen) for index, screen in enumerate(SCREENS, start=1)]
+
+    for name, screen in zip(names, SCREENS):
+        build_screen(int(name.split("-")[1]), screen, state, claimed, allow_spawn=allow_spawn)
+
+    save_state(state)
+    enforce_positions()
+    act("focus-workspace", FOCUS_AT_END)
+
+    print("layout applied:")
+    for index, screen in enumerate(SCREENS, start=1):
+        print("  " + describe_screen(index, screen, state))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

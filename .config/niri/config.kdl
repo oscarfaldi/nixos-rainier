@@ -1,0 +1,427 @@
+// ============================================================
+// NIRI CONFIGURATION
+// ============================================================
+//
+// Host   : rainier
+// Purpose: Personal desktop configuration
+//
+// ============================================================
+
+// ============================================================
+// INPUT
+// Keyboard, mouse, touchpad, repeat rate, layouts
+// https://github.com/YaLTeR/niri/wiki/Configuration:-Input
+// ============================================================
+
+input {
+
+    // Keyboard settings
+    keyboard {
+        xkb {
+
+            // Use standard US keyboard layout
+            // Best for coding, terminal, and general usage
+            layout "us"
+        }
+
+        // Enable numlock automatically on startup
+        numlock
+    }
+
+    // Touchpad settings
+    touchpad {
+
+        // Tap touchpad to click
+        tap
+
+        // macOS-style scrolling
+        // Swipe down = page goes down
+        natural-scroll
+    }
+
+    // Mouse settings
+    mouse {
+
+        // Disable aggressive mouse acceleration
+        accel-profile "flat"
+
+        // Slightly slower mouse movement
+        accel-speed 0
+
+        // Increase scrolling speed
+        scroll-factor 1.5
+    }
+
+    // Focus window when mouse hovers over it
+    focus-follows-mouse
+
+    // Automatically return to previous workspace
+    workspace-auto-back-and-forth
+}
+
+// ============================================================
+// OUTPUTS
+// Monitor layout, resolution, refresh rate, scaling
+// https://github.com/YaLTeR/niri/wiki/Configuration:-Outputs
+// ============================================================
+
+	output "Lenovo Group Limited R27q-30 U533HP7K" {
+	    mode "2560x1440@164.999" // Set resolution and refresh rate
+	    scale 1 // No scaling (use 2 for HiDPI)
+	    position x=0 y=0
+        variable-refresh-rate
+		focus-at-startup
+	}
+	
+	output "Lenovo Group Limited N27q UT332A7X" {
+	    mode "2560x1440@99.946" // Set resolution and refresh rate
+	    scale 1 // No scaling (use 2 for HiDPI)
+	    transform "90"
+	    position x=0 y=-35
+	}
+
+// ============================================================
+// LAYOUT
+// Gaps, borders, focus ring, shadows
+// ============================================================
+
+	layout {
+	    gaps 13
+	    center-focused-column "never"
+	    
+	    preset-column-widths {
+	        proportion 0.33333
+	        proportion 0.5
+	        proportion 0.66667
+	    }
+
+        focus-ring {
+            off
+        }
+
+	    // The border lives in $XDG_STATE_HOME/theme/niri.kdl (included at the END of this file) so
+	    // the colours follow the active palette without a rebuild. Width stays there as well, kept
+	    // at 2px to match the shell surfaces (popups/toasts are 2px): windows and panels read as one
+	    // system. theme-apply rewrites that file and reloads this config.
+	
+	    struts {}
+	}
+
+// ============================================================
+// ANIMATIONS
+// Window and workspace animations
+// ============================================================
+
+	animations {
+	
+	    workspace-switch {
+	        spring damping-ratio=0.92 stiffness=420 epsilon=0.0001
+	    }
+	
+	    horizontal-view-movement {
+	        spring damping-ratio=0.95 stiffness=700 epsilon=0.0001
+	    }
+	
+	    window-movement {
+	        spring damping-ratio=0.92 stiffness=650 epsilon=0.0001
+	    }
+	
+	    window-resize {
+	        spring damping-ratio=0.95 stiffness=800 epsilon=0.0001
+	    }
+	
+	    config-notification-open-close {
+	        spring damping-ratio=0.75 stiffness=1000 epsilon=0.001
+	    }
+	
+	    overview-open-close {
+	        spring damping-ratio=0.90 stiffness=700 epsilon=0.0001
+	    }
+	}
+
+// ============================================================
+// ENVIRONMENT
+// Miscellaneous config
+// ============================================================
+
+    prefer-no-csd
+
+    environment {
+        // Force Electron-based apps (VSCode, Discord, Obsidian) to run natively on Wayland
+        ELECTRON_OZONE_PLATFORM_HINT "auto"
+
+        // Ensure Qt apps (OBS Studio, VLC) use native Wayland and disable server-side decorations
+        QT_QPA_PLATFORM "wayland"
+        QT_WAYLAND_DISABLE_WINDOWDECORATION "1"
+
+        // Define the session identity so D-Bus services and portals correctly recognize Niri
+        XDG_CURRENT_DESKTOP "niri"
+        XDG_SESSION_TYPE "wayland"
+    }
+
+    cursor {
+        xcursor-theme "Bibata-Modern-Ice"
+        xcursor-size 25
+    }
+
+    hotkey-overlay {
+       // Skip displaying the default shortcut guide at startup
+       skip-at-startup
+    }
+
+// ============================================================
+// STARTUP
+// Programs launched when Niri starts
+// https://github.com/YaLTeR/niri/wiki/Configuration:-Miscellaneous#spawn-sh-at-startup
+// ============================================================
+
+	// System services	
+        spawn-at-startup "/run/current-system/sw/libexec/polkit-gnome-authentication-agent-1"
+        // Idle policy is owned by Quickshell (services/PowerService.qml): it starts the
+        // single swayidle instance itself, so there is no second daemon here.
+        // The shell is a systemd user service so a crash restarts it instead of leaving the session
+        // without a bar. niri is the only process holding the session environment (WAYLAND_DISPLAY,
+        // NIRI_SOCKET), so it hands that over before starting the unit - a shell started without
+        // NIRI_SOCKET draws a bar with no workspaces and popups that never open. If systemd refuses,
+        // run the shell directly rather than leaving the session bare.
+        spawn-at-startup "sh" "-c" "systemctl --user import-environment WAYLAND_DISPLAY NIRI_SOCKET XDG_CURRENT_DESKTOP XDG_SESSION_TYPE && systemctl --user start quickshell.service || exec qs -n -p \"$HOME/System/.config/quickshell/main\""
+        spawn-at-startup "wallpaper-session"
+
+	// Applications
+        // spawn-at-startup "chromium" "--app=https://chatgpt.com"
+        // spawn-at-startup "chromium" "--app=https://web.whatsapp.com"
+        // spawn-at-startup "chromium" "--app=https://mail.google.com"
+        // spawn-at-startup "chromium" "--app=http://10.10.10.10:8081"
+
+// ============================================================
+// WINDOW RULES
+// Floating windows, workspace assignments, sizing
+// ============================================================
+
+	// --- GLOBAL RULES ---
+	window-rule {
+	    geometry-corner-radius 0 // Set every window radius to 0
+	    clip-to-geometry true
+	}
+	
+	// --- STEAM CONFIG ---
+	window-rule {
+	    match app-id="steam"
+	    exclude title=r#"^[Ss]team$"#
+	    open-floating true
+	}
+	
+	window-rule {
+	    match app-id="steam" title=r#"^notificationtoasts_\d+_desktop$"#
+	    default-floating-position x=10 y=10 relative-to="bottom-right"
+	    open-focused false
+	}
+	
+	// --- WEB APPS (disabled) ---
+	// These match Edge PWA windows by app-id, which Edge builds from URL host plus path.
+	// Kept commented out and left syntactically correct: placement of the web apps is handled
+	// by .config/niri/scripts/dashboard, because five of them share one app-id
+	// ("msedge-10.10.10.10__-Default") and a rule cannot tell those windows apart.
+	//
+	// window-rule {
+	//     match app-id="msedge-chatgpt.com__-Default"
+	//     match app-id="msedge-mail.google.com__-Default"
+	//     match app-id="msedge-web.whatsapp.com__-Default"
+	//     match app-id="msedge-10.10.10.10__-Default"
+	//     open-on-output "Lenovo Group Limited N27q UT332A7X"
+	// }
+	
+	// --- SIMPLE FLOATING WINDOWS ---
+	window-rule {
+	    match app-id="nm-connection-editor"
+	    match app-id="org.gnome.Calculator"
+	    match app-id="qimgv"
+	    match app-id="mpv"
+	    open-floating true
+	}
+	
+	// --- FLOATING CATEGORY: STANDARD MEDIUM (900 x 700) ---
+	window-rule {
+	    match app-id="com.saivert.pwvucontrol"
+    match app-id="org.nickvision.tubeconverter"
+	    match app-id="engrampa"
+	    match app-id="mousepad"
+	    match app-id="gnome-disks"
+	    match app-id="xdg-desktop-portal-gtk"
+	    open-floating true
+	    default-column-width { fixed 900; }
+	    default-window-height { fixed 700; }
+	}
+	
+	// --- FLOATING DIALOGS: QUICKSHELL REPORT WINDOWS ---
+	// Same 900x700 footprint the old dialog windows had, but these are real toplevels from the
+	// shell (popups/DialogWindow.qml), so they tile/resize/lock like any other window.
+	window-rule {
+	    match app-id="org.quickshell"
+	    open-floating true
+	    default-column-width { fixed 900; }
+	    default-window-height { fixed 700; }
+	}
+
+	// --- FLOATING CATEGORY: DOCUMENT SQUARE (1000 x 1000) ---
+	window-rule {
+	    match app-id="atril"
+	    match app-id="com.github.jeromerobert.pdfarranger"
+	    open-floating true
+	    default-column-width { fixed 1000; }
+	    default-window-height { fixed 1000; }
+	}
+
+// ============================================================
+// KEYBINDS
+// Main keyboard shortcuts
+// https://github.com/YaLTeR/niri/wiki/Configuration:-Key-Bindings
+// https://docs.noctalia.dev/getting-started/keybinds/
+// ============================================================
+
+binds {
+    // ─── Applications ───
+    Mod+Return                          hotkey-overlay-title="Open Terminal: Ghostty" { spawn "ghostty"; }
+    Mod+B                               hotkey-overlay-title="Open Browser: Edge" { spawn "microsoft-edge"; }
+    Mod+D                               hotkey-overlay-title="Open App Launcher" { spawn "sh" "-c" "exec \"$HOME/System/.config/quickshell/scripts/qs-popup\" launcher"; }
+    Mod+E                               hotkey-overlay-title="File Manager: Thunar" { spawn "thunar"; }
+    Mod+Shift+L                         hotkey-overlay-title="Lock Screen" { spawn "sh" "-c" "exec \"$HOME/System/.config/quickshell/scripts/qs-lock\""; }
+    Mod+Shift+Q                         hotkey-overlay-title="Power Menu" { spawn "sh" "-c" "exec \"$HOME/System/.config/quickshell/scripts/qs-popup\" power"; }
+    Mod+Shift+D                         hotkey-overlay-title="Dashboard Layout" { spawn "dashboard"; }
+    Mod+Shift+S                         hotkey-overlay-title="Notes: Mousepad" { spawn "mousepad"; }
+    Mod+Shift+C                         hotkey-overlay-title="Calculator" { spawn "gnome-calculator"; }
+    Mod+Shift+E                         hotkey-overlay-title="File Manager: Yazi" { spawn "ghostty" "-e" "yazi"; }
+    Mod+Shift+W                         hotkey-overlay-title="Work Documents: OnlyOffice" { spawn "onlyoffice-desktopeditors"; }
+    Mod+Shift+V                         hotkey-overlay-title="Audio Panel" { spawn "sh" "-c" "exec \"$HOME/System/.config/quickshell/scripts/qs-popup\" audio"; }
+    Mod+Shift+G                         hotkey-overlay-title="Network: Network Manager" { spawn "nm-connection-editor"; }
+
+    // ─── Media Controls ───
+    XF86AudioRaiseVolume                allow-when-locked=true { spawn "wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%+"; }
+    XF86AudioLowerVolume                allow-when-locked=true { spawn "wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-"; }
+    XF86AudioMute                       allow-when-locked=true { spawn "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle"; }
+    XF86AudioMicMute                    allow-when-locked=true { spawn "wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle"; }
+    XF86AudioNext                       allow-when-locked=true { spawn "playerctl next"; }
+    XF86AudioPrev                       allow-when-locked=true { spawn "playerctl previous"; }
+    XF86AudioPlay                       allow-when-locked=true { spawn "playerctl play-pause"; }
+    XF86AudioPause                      allow-when-locked=true { spawn "playerctl pause"; }
+
+    // ─── Brightness Controls ───
+    XF86MonBrightnessUp                 allow-when-locked=true { spawn "brightnessctl set +5%"; }
+    XF86MonBrightnessDown               allow-when-locked=true { spawn "brightnessctl set 5%-"; }
+
+    // ─── Window Movement and Focus ───
+    Mod+X                               { close-window; }
+
+    Mod+Left                            { focus-column-left; }
+    Mod+H                               { focus-column-left; }
+    Mod+Right                           { focus-column-right; }
+    Mod+L                               { focus-column-right; }
+    Mod+Up                              { focus-window-up; }
+    Mod+K                               { focus-window-up; }
+    Mod+Down                            { focus-window-down; }
+    Mod+J                               { focus-window-down; }
+
+    Mod+CTRL+Left                       { move-column-left; }
+    Mod+CTRL+F                          { expand-column-to-available-width; }
+    Mod+CTRL+H                          { move-column-left; }
+    Mod+CTRL+Right                      { move-column-right; }
+    Mod+CTRL+L                          { move-column-right; }
+    Mod+CTRL+UP                         { move-window-up; }
+    Mod+CTRL+K                          { move-window-up; }
+    Mod+CTRL+Down                       { move-window-down; }
+    Mod+CTRL+J                          { move-window-down; }
+
+    Mod+Home                            { focus-column-first; }
+    Mod+End                             { focus-column-last; }
+    Mod+CTRL+Home                       { move-column-to-first; }
+    Mod+CTRL+End                        { move-column-to-last; }
+
+    Mod+Shift+Left                      { focus-monitor-left; }
+    Mod+Shift+Right                     { focus-monitor-right; }
+    Mod+Shift+UP                        { focus-monitor-up; }
+    Mod+Shift+Down                      { focus-monitor-down; }
+
+    Mod+Shift+CTRL+Left                 { move-column-to-monitor-left; }
+    Mod+Shift+CTRL+Right                { move-column-to-monitor-right; }
+    Mod+Shift+CTRL+UP                   { move-column-to-monitor-up; }
+    Mod+Shift+CTRL+Down                 { move-column-to-monitor-down; }
+
+    // ─── Workspace Switching ───
+    Mod+WheelScrollDown                 cooldown-ms=150 { focus-workspace-down; }
+    Mod+WheelScrollUp                   cooldown-ms=150 { focus-workspace-up; }
+    Mod+CTRL+WheelScrollDown            cooldown-ms=150 { move-column-to-workspace-down; }
+    Mod+CTRL+WheelScrollUp              cooldown-ms=150 { move-column-to-workspace-up; }
+
+    Mod+WheelScrollRight                { focus-column-right; }
+    Mod+WheelScrollLeft                 { focus-column-left; }
+    Mod+CTRL+WheelScrollRight           { move-column-right; }
+    Mod+CTRL+WheelScrollLeft            { move-column-left; }
+
+    Mod+Shift+WheelScrollDown           { focus-column-right; }
+    Mod+Shift+WheelScrollUp             { focus-column-left; }
+    Mod+CTRL+Shift+WheelScrollDown      { move-column-right; }
+    Mod+CTRL+Shift+WheelScrollUp        { move-column-left; }
+
+    Mod+1                               { focus-workspace 1; }
+    Mod+2                               { focus-workspace 2; }
+    Mod+3                               { focus-workspace 3; }
+    Mod+4                               { focus-workspace 4; }
+    Mod+5                               { focus-workspace 5; }
+    Mod+6                               { focus-workspace 6; }
+    Mod+7                               { focus-workspace 7; }
+    Mod+8                               { focus-workspace 8; }
+    Mod+9                               { focus-workspace 9; }
+
+    Mod+CTRL+1                          { move-column-to-workspace 1; }
+    Mod+CTRL+2                          { move-column-to-workspace 2; }
+    Mod+CTRL+3                          { move-column-to-workspace 3; }
+    Mod+CTRL+4                          { move-column-to-workspace 4; }
+    Mod+CTRL+5                          { move-column-to-workspace 5; }
+    Mod+CTRL+6                          { move-column-to-workspace 6; }
+    Mod+CTRL+7                          { move-column-to-workspace 7; }
+    Mod+CTRL+8                          { move-column-to-workspace 8; }
+    Mod+CTRL+9                          { move-column-to-workspace 9; }
+
+    Mod+TAB                             { focus-workspace-previous; }
+
+    // ─── Layout Controls ───
+    Mod+F                               { expand-column-to-available-width; }
+    Mod+C                               { center-column; }
+    Mod+CTRL+C                          { center-visible-columns; }
+    Mod+Minus                           { set-column-width "-10%"; }
+    Mod+Equal                           { set-column-width "+10%"; }
+    Mod+Shift+Minus                     { set-window-height "-10%"; }
+    Mod+Shift+Equal                     { set-window-height "+10%"; }
+
+    // ─── Modes ───
+    Mod+T                               { toggle-window-floating; }
+    Mod+Alt+F                           { fullscreen-window; }
+    Mod+W                               { toggle-column-tabbed-display; }
+
+    // ─── Wallpaper ───
+    CTRL+TAB                            { spawn "wallpaper-next"; }
+    CTRL+Shift+TAB                      { spawn "theme-next"; }
+
+    // ─── Screenshots ───
+    CTRL+Shift+1                        { spawn "screenshot"; }
+
+    // ─── Emergency Escape Key ───
+    // Use this when a fullscreen app blocks your keybinds.
+    // It disables any active keyboard shortcut inhibitor, restoring control.
+    Mod+ESCAPE                          allow-inhibiting=false { toggle-keyboard-shortcuts-inhibit; }
+
+    // ─── Exit / Power ───
+    CTRL+ALT+Delete                     { quit; } // Also quits Niri
+    Mod+Shift+P                         { power-off-monitors; } // Turn off screens (useful for OLED or privacy)
+    Mod+Q                               repeat=false { toggle-overview; }
+}
+
+// ============================================================
+// Theme (border colours)
+//
+// Last line on purpose: niri merges what the included file sets over what came before, so this is
+// the one place a palette can recolour the window border without a rebuild. The file is created by
+// theme-apply (and seeded by Home Manager activation, because niri refuses to start when an include
+// is missing).
+// ============================================================
+include "~/.local/state/theme/niri.kdl"

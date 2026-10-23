@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+
+# ============================================================
+# Wallpaper Session
+#
+# Runs once at niri startup (spawn-at-startup): makes sure awww-daemon is up, applies the active theme
+# (which sets the palette AND that theme's background), then proves that EVERY output really shows an
+# image.
+#
+# On a fresh install the state dir is empty, theme-current falls back to gruvbox and this same script
+# seeds everything, which is what makes a reinstall land in a working, themed desktop.
+#
+# Two failure modes this script is built around:
+#
+#  1. At login the Wayland socket is up but the daemon may not start on the first try. An earlier
+#     version waited two seconds, gave up, and ran theme-apply against a daemon that was not there -
+#     theme-apply skips the wallpaper when it cannot reach the daemon, leaving a "themed but black"
+#     desktop with no error anywhere.
+#  2. Outputs enumerate one after another. awww applies an image only to the outputs that exist at that
+#     moment, and the old verification was `awww query | grep -q image:` - true as soon as ONE output
+#     had an image. On a two-monitor desktop the second output therefore stayed black until something
+#     re-applied the wallpaper by hand (Ctrl+Tab). The check is now counted per output against niri's
+#     own output list, and it retries for a while because a monitor that wakes late is normal.
+# ============================================================
+
+set -uo pipefail
+
+log_dir="${XDG_STATE_HOME:-$HOME/.local/state}/theme"
+log="$log_dir/wallpaper.log"
+mkdir -p "$log_dir" "$HOME/.cache/awww"
+
+note() { printf '%s %s\n' "$(date '+%H:%M:%S')" "$*" >>"$log"; }
+
+daemon_up() { awww query >/dev/null 2>&1; }
+
+start_daemon() {
+    # The package ships a wrapper, so `pgrep -x awww-daemon` misses the running daemon and a second
+    # one was spawned (it aborted with a core dump). `awww query` is the only reliable test.
+    daemon_up && return 0
+
+    # Give a leftover socket a moment to be reclaimed before starting a new daemon.
+    rm -f "${XDG_RUNTIME_DIR:-/tmp}/${WAYLAND_DISPLAY:-wayland-1}-awww-daemon.sock" 2>/dev/null
+
+    setsid -f awww-daemon >"$log_dir/awww-daemon.log" 2>&1 </dev/null
+
+    local i=0
+    while [ "$i" -lt 60 ]; do
+        daemon_up && { note "daemon started after $((i * 100))ms"; return 0; }
+        sleep 0.1
+        i=$((i + 1))
+    done
+
+    note "daemon did NOT answer after 6s; see $log_dir/awww-daemon.log"
+    return 1
+}
+
+outputs_known() { niri msg outputs 2>/dev/null | grep -c '^Output'; }
+images_shown() { awww query 2>/dev/null | grep -c 'currently displaying: image:'; }
+
+apply_theme() {
+    # --no-rotate: logging in must not shuffle the wallpaper, only restore it.
+    theme-apply "$(theme-current)" --no-rotate >>"$log" 2>&1
+
+    # awww restores its last image from ~/.cache/awww when the daemon starts, so from the second login
+    # onwards the wallpaper is already there before this script does anything. On a fresh install that
+    # cache does not exist: the daemon starts with no image, and the apply issued this early can be
+    # lost - the daemon then reports an image while the output still shows niri's background (a solid
+    # srgb(64,64,64) grey). Measured with grim: apply once -> grey, apply again a moment later -> image.
+    # So apply immediately (covers "no image at all") and once more after the surface has settled.
+    # Even when the daemon accepts the image, the very first frames after login can be dropped: the
+    # output keeps the compositor's background (a solid srgb(64,64,64) grey) while awww reports an
+    # image. Measured with grim, so both cases are covered - retry until the daemon accepts, then apply
+    # once more after the surface has settled.
+    apply_image || true
+    sleep 2
+    apply_image || true
+    note "wallpaper re-applied after the session settled"
+}
+
+apply_image() {
+    local wp tries=0
+
+    wp="$(cat "$log_dir/wallpaper" 2>/dev/null || true)"
+    [ -n "$wp" ] && [ -f "$wp" ] || return 1
+
+    # The client races the daemon's socket: an `awww img` issued right after the daemon starts fails
+    # with "failed to write message: Broken pipe (os error 32)" and exits 1, and NOTHING is applied -
+    # which is why a wallpaper script wired into spawn-at-startup still left a grey desktop. Every
+    # previous caller hid it with `|| true`. Retry until the daemon really accepts the image.
+    while [ "$tries" -lt 10 ]; do
+        if awww img "$wp" --resize crop --transition-type none >>"$log" 2>&1; then
+            [ "$tries" -gt 0 ] && note "awww img accepted after $tries retr$([ "$tries" -eq 1 ] && echo y || echo ies)"
+            return 0
+        fi
+        tries=$((tries + 1))
+        sleep 0.5
+    done
+
+    note "awww img failed after $tries tries"
+    return 1
+}
+
+if ! start_daemon; then
+    # One more full attempt: a daemon that lost a race with the compositor on the first try usually
+    # works on the second.
+    sleep 1
+    start_daemon || exit 1
+fi
+
+# Wait for the compositor to publish at least one output: applying a wallpaper before that point sets
+# nothing at all.
+i=0
+while [ "$i" -lt 50 ] && [ "$(outputs_known)" -eq 0 ]; do
+    sleep 0.2
+    i=$((i + 1))
+done
+note "outputs ready: $(outputs_known) after $((i * 200))ms"
+
+apply_theme
+
+# Count per output, and keep re-applying while any output still has no image. 20 rounds of one second
+# covers a monitor that wakes up seconds after login.
+round=1
+while [ "$round" -le 20 ]; do
+    known="$(outputs_known)"
+    shown="$(images_shown)"
+
+    if [ "$known" -gt 0 ] && [ "$shown" -ge "$known" ]; then
+        note "wallpaper ok: $(theme-current) ($shown/$known outputs)"
+        exit 0
+    fi
+
+    note "incomplete $shown/$known (round $round) - re-applying"
+    apply_image || note "awww img failed"
+    sleep 1
+    round=$((round + 1))
+done
+
+note "wallpaper STILL incomplete: $(images_shown)/$(outputs_known) outputs"
+exit 1

@@ -1,0 +1,1004 @@
+#!/usr/bin/env python3
+
+from dataclasses import dataclass
+from pathlib import Path
+import os
+import re
+import subprocess
+import sys
+import time
+import traceback
+from typing import Optional
+import signal
+
+from faster_whisper import WhisperModel
+
+# ============================================================
+# Quickshell job reporting
+#
+# qs-job starts this script with QS_JOB_STATUS pointing at a key=value file that the shell's job
+# window polls to draw the progress bar. Without it (a plain terminal run) every call is a no-op.
+# ============================================================
+
+JOB_PATH = os.environ.get("QS_JOB_STATUS", "")
+
+JOB_STATE = {
+    "title": "Transcribe to SRT",
+    "state": "running",
+    "file": "",
+    "detail": "",
+    "index": "1",
+    "total": "1",
+    "percent": "0.0",
+    "speed": "0.00",
+    "eta": "--:--:--",
+    "message": "",
+}
+
+
+def job_write(**fields: str) -> None:
+    """Rewrite the status file atomically; a reader never sees half a file."""
+
+    if not JOB_PATH:
+        return
+
+    JOB_STATE.update(fields)
+
+    tmp = f"{JOB_PATH}.tmp"
+
+    try:
+        with open(tmp, "w", encoding="utf-8") as handle:
+            for key, value in JOB_STATE.items():
+                handle.write(f"{key}={value}\n")
+        os.replace(tmp, JOB_PATH)
+    except OSError:
+        pass
+
+
+def job_cancelled_by_signal(signum, frame) -> None:
+    """The window's cancel button signals the process group; report it before dying."""
+
+    job_write(state="cancelled", message="cancelled")
+
+    # os._exit, not sys.exit: the main thread is parked in faster-whisper"s C code while the model
+    # loads, so a SystemExit would only be raised once that call returns - the job looked alive for
+    # minutes after CANCEL. Nothing to flush here, the partial SRT is handled by the caller.
+    os._exit(130)
+
+
+signal.signal(signal.SIGTERM, job_cancelled_by_signal)
+signal.signal(signal.SIGINT, job_cancelled_by_signal)
+
+
+
+# ============================================================
+# Configuration
+# ============================================================
+
+# Model
+#
+# large-v3        = highest accuracy, slower
+# large-v3-turbo  = strong accuracy, much faster
+# medium / small  = faster still, more accuracy trade-off
+MODEL = "large-v3-turbo"
+
+# Main language is Indonesian.
+# English words/phrases are still allowed naturally in the transcript.
+LANGUAGE = "id"
+
+# Current setup: CPU
+DEVICE = "cpu"
+
+# INT8 is preferable for CPU inference.
+# If DEVICE is changed to "cuda", use float16.
+COMPUTE_TYPE = "int8" if DEVICE == "cpu" else "float16"
+
+# Prioritize speed over maximum decoding accuracy.
+# 1 = greedy decoding / fastest
+BEAM_SIZE = 1
+
+# Ignore long stretches without speech.
+VAD_FILTER = True
+
+# Word-level timestamps let us build short, mobile-friendly subtitles
+# instead of blindly using Whisper's long segment boundaries.
+WORD_TIMESTAMPS = True
+
+# Subtitle pacing
+#
+# Prefer natural 7-9 word captions, while allowing shorter or slightly
+# longer groups when the phrasing and timing make more sense.
+IDEAL_WORDS = 8
+MIN_WORDS = 4
+SOFT_MAX_WORDS = 9
+SHORT_CAPTION_MAX_WORDS = 10
+MAX_CAPTION_DURATION = 3.8
+SHORT_CAPTION_MAX_DURATION = 2.2
+MAX_CHARS_PER_LINE = 38
+MAX_TOTAL_CHARS = 76
+PAUSE_BREAK_SECONDS = 0.40
+
+# Domain vocabulary/context commonly used in your content.
+# Keep this focused on words likely to recur in your actual videos.
+INITIAL_PROMPT = (
+    "Indonesian content about business, productivity, personal branding, "
+    "content creation, marketing, branding, sales, audience, attention, "
+    "retention, algorithm, monetization, conversion, long form, short form, "
+    "creator, leverage, automation, startup, SaaS, API, AI, ChatGPT, Claude, "
+    "Gemini, OpenAI, Anthropic, YouTube, TikTok, Instagram, social media."
+)
+
+
+# ============================================================
+# Supported Media
+# ============================================================
+
+MEDIA_EXTENSIONS = {
+    # Video
+    ".mp4",
+    ".mov",
+    ".mkv",
+    ".avi",
+    ".webm",
+    ".mts",
+    ".m2ts",
+    ".ts",
+    ".m4v",
+
+    # Audio
+    ".mp3",
+    ".wav",
+    ".m4a",
+    ".flac",
+    ".aac",
+    ".ogg",
+    ".opus",
+    ".wma",
+}
+
+
+# ============================================================
+# Data Types
+# ============================================================
+
+@dataclass
+class CaptionWord:
+    text: str
+    start: float
+    end: float
+
+
+# ============================================================
+# Notifications
+# ============================================================
+
+def notify(title: str, message: str) -> None:
+    """Send a desktop notification without affecting the process."""
+    try:
+        subprocess.run(
+            ["notify-send", title, message],
+            check=False,
+        )
+    except Exception:
+        pass
+
+
+# ============================================================
+# Helpers
+# ============================================================
+
+def format_timestamp(seconds: float) -> str:
+    """Format seconds as HH:MM:SS."""
+    seconds = max(0, int(seconds))
+
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    secs = seconds % 60
+
+    return f"{hours:02}:{minutes:02}:{secs:02}"
+
+
+def format_srt_timestamp(seconds: float) -> str:
+    """Format seconds as SRT HH:MM:SS,mmm."""
+    milliseconds = max(0, int(round(seconds * 1000)))
+
+    hours = milliseconds // 3_600_000
+    milliseconds %= 3_600_000
+
+    minutes = milliseconds // 60_000
+    milliseconds %= 60_000
+
+    secs = milliseconds // 1_000
+    milliseconds %= 1_000
+
+    return f"{hours:02}:{minutes:02}:{secs:02},{milliseconds:03}"
+
+
+def format_speed(
+    processed_seconds: float,
+    elapsed_seconds: float,
+) -> str:
+    """Return realtime factor such as 0.80x or 1.50x."""
+    if processed_seconds <= 0 or elapsed_seconds <= 0:
+        return "0.00x"
+
+    return f"{processed_seconds / elapsed_seconds:.2f}x"
+
+
+def format_eta(
+    processed_seconds: float,
+    total_seconds: float,
+    elapsed_seconds: float,
+) -> str:
+    """Estimate remaining processing time."""
+    if (
+        processed_seconds <= 0
+        or elapsed_seconds <= 0
+        or total_seconds <= 0
+    ):
+        return "--:--:--"
+
+    speed = processed_seconds / elapsed_seconds
+
+    if speed <= 0:
+        return "--:--:--"
+
+    remaining = max(
+        0.0,
+        total_seconds - processed_seconds,
+    )
+
+    return format_timestamp(remaining / speed)
+
+
+def next_available_srt(media_path: Path) -> Path:
+    """Find the next non-conflicting SRT output path."""
+    first = media_path.with_suffix(".srt")
+
+    if not first.exists():
+        return first
+
+    counter = 1
+
+    while True:
+        candidate = (
+            media_path.parent
+            / f"{media_path.stem} ({counter}).srt"
+        )
+
+        if not candidate.exists():
+            return candidate
+
+        counter += 1
+
+
+def print_separator() -> None:
+    print("=" * 72)
+
+
+def wait_before_close() -> None:
+    """Keep the terminal open until the user presses Enter."""
+    # A detached job has no stdin: input() raises EOFError and the run that just
+    # transcribed everything ends up reported as FAILED. Only pause for a human.
+    if not sys.stdin.isatty():
+        return
+
+    print()
+    print()
+    input("Press Enter to close...")
+
+
+def clean_word(text: str) -> str:
+    """Remove commas while preserving useful sentence punctuation."""
+    text = text.replace(",", "")
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def caption_text(words: list[CaptionWord]) -> str:
+    """Join caption words into clean subtitle text."""
+    text = " ".join(word.text for word in words)
+    return clean_word(text)
+
+
+def caption_char_count(words: list[CaptionWord]) -> int:
+    """Return visible character count for a caption."""
+    return len(caption_text(words))
+
+
+def caption_duration(words: list[CaptionWord]) -> float:
+    """Return spoken duration for a caption."""
+    if not words:
+        return 0.0
+
+    return max(0.0, words[-1].end - words[0].start)
+
+
+def ends_sentence(word: CaptionWord) -> bool:
+    """Whether a word ends with sentence-level punctuation."""
+    return bool(re.search(r"[.!?…]$", word.text.strip()))
+
+
+def pause_after(words: list[CaptionWord], next_word: CaptionWord) -> float:
+    """Return the spoken pause between two caption groups."""
+    if not words:
+        return 0.0
+
+    return max(0.0, next_word.start - words[-1].end)
+
+
+def wrap_caption(text: str) -> str:
+    """Wrap a caption to at most two mobile-friendly lines."""
+    words = text.split()
+
+    if not words:
+        return ""
+
+    if len(text) <= MAX_CHARS_PER_LINE:
+        return text
+
+    best_split = None
+    best_score = float("inf")
+
+    for index in range(1, len(words)):
+        left = " ".join(words[:index])
+        right = " ".join(words[index:])
+
+        if len(left) > MAX_CHARS_PER_LINE:
+            continue
+
+        if len(right) > MAX_CHARS_PER_LINE:
+            continue
+
+        imbalance = abs(len(left) - len(right))
+        score = imbalance
+
+        if score < best_score:
+            best_score = score
+            best_split = index
+
+    if best_split is None:
+        return text
+
+    return (
+        " ".join(words[:best_split])
+        + "\n"
+        + " ".join(words[best_split:])
+    )
+
+
+def choose_chunk_size(words: list[CaptionWord], start: int) -> int:
+    """Choose a dynamic caption size centered around 4-5 words."""
+    remaining = len(words) - start
+
+    if remaining <= SOFT_MAX_WORDS:
+        candidate = remaining
+
+        if (
+            candidate > MIN_WORDS
+            and caption_duration(words[start:start + candidate])
+            > MAX_CAPTION_DURATION
+        ):
+            return min(3, remaining)
+
+        if candidate > 0 and caption_char_count(
+            words[start:start + candidate]
+        ) <= MAX_TOTAL_CHARS:
+            return candidate
+
+    # Six spoken words can stay together when they are short and fast.
+    if remaining == SHORT_CAPTION_MAX_WORDS:
+        candidate_words = words[start:start + SHORT_CAPTION_MAX_WORDS]
+        if (
+            caption_duration(candidate_words)
+            <= SHORT_CAPTION_MAX_DURATION
+            and caption_char_count(candidate_words)
+            <= MAX_TOTAL_CHARS
+        ):
+            return SHORT_CAPTION_MAX_WORDS
+
+        return 3
+
+    # For longer material, prefer balanced 4-5 word chunks while making
+    # sure the remaining tail is never reduced to a useless 1-2 words.
+    candidate_sizes = [4, 5, 3]
+
+    if remaining >= 10:
+        candidate_sizes = [5, 4, 3]
+
+    valid_sizes = []
+
+    for size in candidate_sizes:
+        if size > remaining:
+            continue
+
+        leftover = remaining - size
+
+        if leftover == 0 or leftover >= MIN_WORDS:
+            valid_sizes.append(size)
+
+    if not valid_sizes:
+        return min(remaining, IDEAL_WORDS)
+
+    best_size = valid_sizes[0]
+    best_score = float("inf")
+
+    for size in valid_sizes:
+        chunk = words[start:start + size]
+        next_word = words[start + size] if start + size < len(words) else None
+
+        duration = caption_duration(chunk)
+        chars = caption_char_count(chunk)
+
+        score = abs(size - IDEAL_WORDS) * 2
+
+        if duration > MAX_CAPTION_DURATION:
+            score += (duration - MAX_CAPTION_DURATION) * 8
+
+        if chars > MAX_TOTAL_CHARS:
+            score += (chars - MAX_TOTAL_CHARS) * 0.5
+
+        if next_word is not None:
+            if ends_sentence(chunk[-1]):
+                score -= 7
+
+            if pause_after(chunk, next_word) >= PAUSE_BREAK_SECONDS:
+                score -= 4
+
+        if size == 5:
+            score -= 0.5
+
+        if score < best_score:
+            best_score = score
+            best_size = size
+
+    return best_size
+
+
+def build_caption_groups(
+    words: list[CaptionWord],
+) -> list[list[CaptionWord]]:
+    """Split word timestamps into short, readable subtitle groups."""
+    groups: list[list[CaptionWord]] = []
+    index = 0
+
+    while index < len(words):
+        size = choose_chunk_size(words, index)
+        group = words[index:index + size]
+
+        if not group:
+            break
+
+        groups.append(group)
+        index += size
+
+    return groups
+
+
+def segment_words(segment) -> list[CaptionWord]:
+    """Convert a faster-whisper segment into timestamped words."""
+    if not getattr(segment, "words", None):
+        return []
+
+    words: list[CaptionWord] = []
+
+    for word in segment.words:
+        text = clean_word(str(word.word))
+
+        if not text:
+            continue
+
+        words.append(
+            CaptionWord(
+                text=text,
+                start=float(word.start),
+                end=float(word.end),
+            )
+        )
+
+    return words
+
+
+# ============================================================
+# Validation
+# ============================================================
+
+def validate_input(argv: list[str]) -> Optional[Path]:
+    """Validate that exactly one supported media file was selected."""
+
+    if len(argv) != 2:
+        notify(
+            "Subtitle Generation Failed",
+            "Select exactly one audio or video file",
+        )
+        return None
+
+    media_path = Path(argv[1]).expanduser()
+
+    if not media_path.exists():
+        notify(
+            "Subtitle Generation Failed",
+            f"File not found: {media_path.name}",
+        )
+        return None
+
+    if not media_path.is_file():
+        notify(
+            "Subtitle Generation Failed",
+            f"Not a file: {media_path.name}",
+        )
+        return None
+
+    if media_path.suffix.lower() not in MEDIA_EXTENSIONS:
+        notify(
+            "Subtitle Generation Failed",
+            f"Unsupported extension: {media_path.suffix}",
+        )
+        return None
+
+    return media_path
+
+
+# ============================================================
+# Progress
+# ============================================================
+
+def print_progress(
+    processed_seconds: float,
+    total_seconds: float,
+    elapsed_seconds: float,
+) -> None:
+    """Print live transcription progress."""
+
+    if total_seconds > 0:
+        percent = min(
+            100.0,
+            max(
+                0.0,
+                (processed_seconds / total_seconds) * 100.0,
+            ),
+        )
+    else:
+        percent = 0.0
+
+    speed = format_speed(
+        processed_seconds,
+        elapsed_seconds,
+    )
+
+    eta = format_eta(
+        processed_seconds,
+        total_seconds,
+        elapsed_seconds,
+    )
+
+    job_write(
+        state="running",
+        percent=f"{percent:.1f}",
+        speed=speed,
+        eta=eta,
+    )
+
+    # The job log must stay readable: only a terminal gets the once-per-second live line. In the
+    # job window the bars carry the live numbers, so the log gets one line per 10% instead.
+    if not sys.stdout.isatty():
+        JOB_LOG_CHECKPOINT = globals().get("JOB_LOG_CHECKPOINT", -1)
+        step = int(percent // 10) * 10
+
+        if step > JOB_LOG_CHECKPOINT:
+            globals()["JOB_LOG_CHECKPOINT"] = step
+            print(
+                f"  {step:3d}%  "
+                f"{format_timestamp(processed_seconds)} / {format_timestamp(total_seconds)}  "
+                f"speed {speed}  eta {eta}"
+            )
+
+        return
+
+    print(
+        "\r"
+        f"Progress: {percent:5.1f}% | "
+        f"Processed: {format_timestamp(processed_seconds)} / "
+        f"{format_timestamp(total_seconds)} | "
+        f"Speed: {speed} | "
+        f"ETA: {eta}",
+        end="",
+        flush=True,
+    )
+
+
+# ============================================================
+# Transcription
+# ============================================================
+
+def run_transcription(media_path: Path) -> int:
+
+    srt_path = next_available_srt(media_path)
+
+    total_start_time = time.time()
+
+    notify(
+        "Generating Subtitle",
+        media_path.name,
+    )
+
+    job_write(
+        state="running",
+        file=media_path.name,
+        detail="loading model",
+    )
+
+    print()
+    print_separator()
+    print(" TRANSCRIBE VIDEO TO SRT")
+    print_separator()
+    print()
+
+    print(f"Input    : {media_path.name}")
+    print(f"Output   : {srt_path.name}")
+    print(f"Model    : {MODEL}")
+    print(f"Language : {LANGUAGE}")
+    print(f"Device   : {DEVICE}")
+    print(f"Compute  : {COMPUTE_TYPE}")
+    print(f"Beam     : {BEAM_SIZE}")
+    print(
+        f"VAD      : {'ON' if VAD_FILTER else 'OFF'}"
+    )
+    print(
+        f"Word TS  : {'ON' if WORD_TIMESTAMPS else 'OFF'}"
+    )
+
+    print()
+    print_separator()
+    print()
+
+    try:
+
+        # ----------------------------------------------------
+        # Load model
+        # ----------------------------------------------------
+
+        print("Loading model...")
+        print()
+
+        load_start_time = time.time()
+
+        model = WhisperModel(
+            MODEL,
+            device=DEVICE,
+            compute_type=COMPUTE_TYPE,
+        )
+
+        load_elapsed = (
+            time.time()
+            - load_start_time
+        )
+
+        print("Model loaded.")
+        print(
+            f"Model load : "
+            f"{format_timestamp(load_elapsed)} "
+            f"({load_elapsed:.1f}s)"
+        )
+
+        print()
+        print("Starting transcription...")
+        print()
+
+        # ----------------------------------------------------
+        # Transcription
+        # ----------------------------------------------------
+
+        transcription_start_time = time.time()
+
+        segments, info = model.transcribe(
+            str(media_path),
+            language=LANGUAGE,
+            task="transcribe",
+            beam_size=BEAM_SIZE,
+            vad_filter=VAD_FILTER,
+            initial_prompt=INITIAL_PROMPT,
+            word_timestamps=WORD_TIMESTAMPS,
+        )
+
+        total_duration = float(info.duration)
+
+        print(
+            f"Duration : "
+            f"{format_timestamp(total_duration)}"
+        )
+
+        print()
+
+        subtitle_count = 0
+        last_processed = 0.0
+        last_reported_second = -1
+
+        with open(
+            srt_path,
+            "w",
+            encoding="utf-8",
+        ) as srt:
+
+            for segment in segments:
+
+                processed = min(
+                    float(segment.end),
+                    total_duration,
+                )
+
+                elapsed = (
+                    time.time()
+                    - transcription_start_time
+                )
+
+                # Update terminal progress once per second.
+                processed_second = int(processed)
+
+                if (
+                    processed_second
+                    != last_reported_second
+                ):
+                    print_progress(
+                        processed,
+                        total_duration,
+                        elapsed,
+                    )
+
+                    last_reported_second = (
+                        processed_second
+                    )
+
+                last_processed = processed
+
+                words = segment_words(segment)
+
+                # Word timestamps are expected to be available here.
+                # If the installed faster-whisper version does not return
+                # them, fall back to the original segment-level subtitle.
+                if not words:
+                    text = clean_word(
+                        segment.text.strip()
+                    )
+
+                    if text:
+                        subtitle_count += 1
+                        srt.write(
+                            f"{subtitle_count}\n"
+                        )
+                        srt.write(
+                            f"{format_srt_timestamp(segment.start)}"
+                            f" --> "
+                            f"{format_srt_timestamp(segment.end)}\n"
+                        )
+                        srt.write(
+                            f"{wrap_caption(text)}\n\n"
+                        )
+
+                    continue
+
+                groups = build_caption_groups(words)
+
+                for group in groups:
+                    text = caption_text(group)
+
+                    if not text:
+                        continue
+
+                    subtitle_count += 1
+
+                    srt.write(
+                        f"{subtitle_count}\n"
+                    )
+                    srt.write(
+                        f"{format_srt_timestamp(group[0].start)}"
+                        f" --> "
+                        f"{format_srt_timestamp(group[-1].end)}\n"
+                    )
+                    srt.write(
+                        f"{wrap_caption(text)}\n\n"
+                    )
+
+                srt.flush()
+
+        transcription_elapsed = (
+            time.time()
+            - transcription_start_time
+        )
+
+        total_elapsed = (
+            time.time()
+            - total_start_time
+        )
+
+        # Force progress display to 100%.
+        print_progress(
+            total_duration,
+            total_duration,
+            transcription_elapsed,
+        )
+
+        print()
+        print()
+
+        job_write(
+            state="done",
+            percent="100.0",
+            message=(
+                f"{subtitle_count} subtitles in "
+                f"{format_timestamp(total_elapsed)}"
+            ),
+        )
+
+        print_separator()
+        print(" COMPLETE")
+        print_separator()
+
+        print()
+        print(f"Input     : {media_path.name}")
+        print(f"Output    : {srt_path.name}")
+        print(f"Subtitles : {subtitle_count}")
+        print(f"Duration  : {format_timestamp(total_duration)}")
+        print(f"Load      : {format_timestamp(load_elapsed)}")
+        print(f"Transcribe: {format_timestamp(transcription_elapsed)}")
+        print(f"Total     : {format_timestamp(total_elapsed)}")
+        print(
+            f"Speed     : "
+            f"{format_speed(total_duration or last_processed, transcription_elapsed)}"
+        )
+
+        print()
+        print_separator()
+
+        notify(
+            "Subtitle Ready",
+            srt_path.name,
+        )
+
+        wait_before_close()
+
+        return 0
+
+    except KeyboardInterrupt:
+
+        elapsed = (
+            time.time()
+            - total_start_time
+        )
+
+        print()
+        print()
+        job_write(
+            state="cancelled",
+            message="cancelled",
+        )
+
+        print_separator()
+        print(" CANCELLED")
+        print_separator()
+        print()
+
+        print(
+            f"Input   : {media_path.name}"
+        )
+
+        print(
+            f"Elapsed : "
+            f"{format_timestamp(elapsed)}"
+        )
+
+        if srt_path.exists():
+            print(
+                f"Partial SRT: "
+                f"{srt_path.name}"
+            )
+
+            print(
+                "The partial subtitle file "
+                "was preserved."
+            )
+
+        print()
+        print_separator()
+
+        notify(
+            "Subtitle Generation Cancelled",
+            media_path.name,
+        )
+
+        wait_before_close()
+
+        return 130
+
+    except Exception as exc:
+
+        elapsed = (
+            time.time()
+            - total_start_time
+        )
+
+        print()
+        print()
+        job_write(
+            state="failed",
+            message="transcription failed",
+        )
+
+        print_separator()
+        print(" FAILED")
+        print_separator()
+        print()
+
+        print(
+            f"Input   : "
+            f"{media_path.name}"
+        )
+
+        print(
+            f"Elapsed : "
+            f"{format_timestamp(elapsed)}"
+        )
+
+        print()
+        print("Error:")
+
+        print(
+            f"{type(exc).__name__}: "
+            f"{exc}"
+        )
+
+        print()
+
+        if srt_path.exists():
+
+            print(
+                f"Partial output: "
+                f"{srt_path.name}"
+            )
+
+            print(
+                "The partial output file "
+                "was preserved."
+            )
+
+            print()
+
+        print("Traceback:")
+        print("-" * 64)
+
+        traceback.print_exc()
+
+        print("-" * 64)
+        print()
+
+        print_separator()
+
+        notify(
+            "Subtitle Generation Failed",
+            f"{media_path.name}: "
+            f"{type(exc).__name__}",
+        )
+
+        wait_before_close()
+
+        return 1
+
+
+# ============================================================
+# Main
+# ============================================================
+
+def main() -> int:
+
+    media_path = validate_input(sys.argv)
+
+    if media_path is None:
+        return 1
+
+    return run_transcription(
+        media_path
+    )
+
+
+if __name__ == "__main__":
+    sys.exit(main())

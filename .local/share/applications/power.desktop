@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Power
+Comment=Power menu
+Exec=power-menu
+Icon=/home/oscarfaldi/System/assets/icons/desktop/power.svg
+Terminal=false
+Categories=Power;
+Keywords=shutdown;reboot;suspend;logout;

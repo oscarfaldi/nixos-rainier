@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+
+# ==============================================================================
+# Rainier Boot Rebuild Script
+# 
+# Description: Builds the next NixOS generation for activation on the
+#              next boot and optionally reboots the system.
+# ==============================================================================
+
+# Exit immediately if a command exits with a non-zero status
+set -e
+
+# ------------------------------------------------------------------------------
+# Configuration & Variables
+# ------------------------------------------------------------------------------
+SYSTEM_DIR="$HOME/System"
+CONFIG="$SYSTEM_DIR/configuration.nix"
+
+# ------------------------------------------------------------------------------
+# UI Helper Functions
+# ------------------------------------------------------------------------------
+print_header() {
+    local title="$1"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo " $title"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo
+}
+
+# ------------------------------------------------------------------------------
+# Main Execution
+# ------------------------------------------------------------------------------
+main() {
+    print_header "Rainier Boot Rebuild"
+    echo "Building next generation..."
+    echo
+
+    # Execute NixOS boot build with explicit configuration path
+    # FIX: Combined the multiline command properly using '\'
+    sudo nixos-rebuild boot \
+        --flake "$SYSTEM_DIR#rainier"
+
+    echo
+    print_header "Build Complete"
+    echo "Changes will apply after reboot."
+    echo
+
+    # Prompt user for immediate action
+    read -rp "Reboot now? [y/N]: " answer
+    case "$answer" in
+        [Yy]*)
+            echo "Rebooting system..."
+            sudo reboot
+            ;;
+        *)
+            echo
+            echo "Reboot when ready."
+            ;;
+    esac
+}
+
+# Run the main function
+main "$@"

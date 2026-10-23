@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=System
+Comment=NixOS Operations
+Exec=system-menu
+Terminal=false
+Icon=nix-snowflake
+Categories=System;

@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+
+# ============================================================
+# Wallpaper Next
+#
+# Ctrl+Tab. Cycles to the NEXT background of the theme that is active right now and records it in the
+# state dir, so the choice survives a logout (wallpaper-session restores it with --no-rotate).
+#
+# The gallery belongs to the theme, not to a global folder: switching theme switches gallery, which
+# is why there is no separate wallpaper list to maintain.
+# ============================================================
+
+set -uo pipefail
+
+state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/theme"
+name="$(theme-current)"
+
+files=()
+for dir in \
+    "$HOME/.local/share/qs-palettes-user/$name/backgrounds" \
+    "/etc/qs-palettes/$name/backgrounds"; do
+    [[ -d "$dir" ]] || continue
+    while IFS= read -r f; do files+=("$f"); done < <(
+        find "$dir" -maxdepth 1 -type f \
+            \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' \) -print | sort
+    )
+done
+
+if (( ${#files[@]} == 0 )); then
+    echo "wallpaper-next: no backgrounds for theme '$name'" >&2
+    exit 1
+fi
+
+current="$(cat "$state_dir/wallpaper" 2>/dev/null || true)"
+idx=-1
+for i in "${!files[@]}"; do
+    [[ "${files[$i]}" == "$current" ]] && idx=$i
+done
+next="${files[$(( (idx + 1) % ${#files[@]} ))]}"
+
+printf '%s\n' "$next" >"$state_dir/wallpaper"
+
+# fade, not grow: a colour-crossfade instead of the circle wipe that felt wrong on photo wallpapers.
+# Falls back to a plain set if the daemon is not running (wallpaper-session starts it at login).
+if awww query >/dev/null 2>&1; then
+    awww img "$next" --resize crop --transition-type fade --transition-duration 4.0 \
+        --transition-fps 60 --transition-bezier ".33,0,.2,1" \
+        >/dev/null 2>&1 || awww img "$next" >/dev/null 2>&1 || true
+fi

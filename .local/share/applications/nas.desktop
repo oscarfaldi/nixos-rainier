@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=NAS
+Comment=NAS Operations
+Exec=nas-menu
+Terminal=false
+Icon=/home/oscarfaldi/System/assets/icons/desktop/nas.svg
+Categories=System;

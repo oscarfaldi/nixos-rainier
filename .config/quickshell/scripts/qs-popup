@@ -1,0 +1,79 @@
+#!/bin/sh
+# Toggle a Quickshell popup on the focused output, for niri keybinds.
+#
+#   qs-popup launcher         -> application launcher
+#   qs-popup power            -> power menu
+#   qs-popup audio            -> audio panel
+#   qs-popup network          -> network panel
+#   qs-popup powermanagement  -> screen-off / sleep policy
+#   qs-popup close            -> close any open popup
+#
+# Fast path: one line into the FIFO the shell already reads (~3 ms, no client binary).
+#
+# The recorded pid is validated against /proc before use. A stale pid (a shell that died, a reload
+# that left the old process behind, or another instance writing the same file) used to send every
+# keybind into a FIFO nobody reads - the launcher simply did nothing - so a live main shell is
+# discovered directly whenever the recorded one is not it.
+set -eu
+
+runtime="${XDG_RUNTIME_DIR:-/tmp}"
+state_file="$runtime/quickshell-shell.pid"
+shell_path="${HOME}/System/.config/quickshell/main"
+
+is_main_shell() {
+    [ -r "/proc/$1/cmdline" ] || return 1
+    tr '\0' ' ' <"/proc/$1/cmdline" | grep -q "quickshell/main"
+}
+
+shell_pid=""
+if [ -r "$state_file" ]; then
+    read -r shell_pid <"$state_file" || true
+fi
+
+if [ -z "$shell_pid" ] || ! is_main_shell "$shell_pid"; then
+    shell_pid=""
+    # newest wins: a hot reload leaves the previous process around for a moment
+    for candidate in $(pgrep -f "quickshell -p $shell_path" 2>/dev/null | sort -rn); do
+        if is_main_shell "$candidate"; then
+            shell_pid="$candidate"
+            break
+        fi
+    done
+    if [ -n "$shell_pid" ]; then
+        printf '%s\n' "$shell_pid" >"$state_file" 2>/dev/null || true
+    fi
+fi
+
+command_pipe="$runtime/quickshell-cmd-${shell_pid:-0}"
+
+# `exec 3<>` opens the FIFO read-write, which never blocks even when no reader is attached; the shell
+# is the only process that reads, so the line reaches it. Never let a missing shell hang a keybind.
+if [ -n "$shell_pid" ] && [ -p "$command_pipe" ]; then
+    if exec 3<>"$command_pipe"; then
+        echo "$1" >&3
+        exit 0
+    fi
+fi
+
+# Fallback: a shell without the FIFO (older build) is still reachable over IPC.
+pid="${shell_pid:-}"
+
+alive=""
+if [ -n "${pid:-}" ] && [ -r "/proc/$pid/comm" ]; then
+    comm=""
+    read -r comm <"/proc/$pid/comm" || comm=""
+    case "$comm" in
+        *quickshell*) alive=1 ;;
+    esac
+fi
+
+if [ -z "$alive" ]; then
+    pid=$(pgrep -f "quickshell -p $shell_path" | head -1)
+fi
+
+# No running shell: nothing to toggle. Never fail a keybind.
+if [ -z "${pid:-}" ]; then
+    exit 0
+fi
+
+exec qs ipc --pid "$pid" call shell "$1"

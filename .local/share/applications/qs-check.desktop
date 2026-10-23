@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Shell Check
+Comment=Check the Quickshell stack: process, pipe, ping round trip, lock, theme
+Exec=ghostty --wait-after-command=true -e qs-check
+Icon=/home/oscarfaldi/System/assets/icons/desktop/config.svg
+Terminal=false
+Categories=System;
+Keywords=quickshell;check;health;doctor;

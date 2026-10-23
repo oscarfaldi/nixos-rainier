@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+
+# ==============================================================================
+# Script Name: Smart ZIP Archiver
+# Description: Compresses selected files/folders into a timestamped ZIP archive
+#              with a clean internal structure.
+# ==============================================================================
+
+set -euo pipefail
+
+# 0. Safety Check: Ensure at least one argument is provided to prevent crash
+if [ $# -eq 0 ]; then
+    notify-send -i dialog-error "ZIP Archive Error" "No files or folders selected."
+    exit 1
+fi
+
+# 1. Determine the base directory from the first selected item
+FIRST="$1"
+DIR="$(dirname "$FIRST")"
+TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
+
+# 2. Adaptive Naming: Use the first item's name if only one item is selected
+if [ "$#" -eq 1 ]; then
+    BASE_NAME=$(basename "$FIRST")
+    # Strip extension if it's a file, keep it if it's a directory
+    if [ -f "$FIRST" ]; then
+        BASE_NAME="${BASE_NAME%.*}"
+    fi
+else
+    # Fallback name if multiple items are selected (uses the parent folder name)
+    BASE_NAME=$(basename "$DIR")
+fi
+
+OUTPUT_NAME="${BASE_NAME}-${TIMESTAMP}.zip"
+OUTPUT_PATH="$DIR/$OUTPUT_NAME"
+
+# 3. Transform absolute paths to relative paths for clean internal zip structure
+RELATIVE_TARGETS=()
+for ARG in "$@"; do
+    RELATIVE_TARGETS+=("$(basename "$ARG")")
+done
+
+# 4. Change directory to the source folder before compressing
+cd "$DIR"
+
+# 5. Execute compression using the relative paths
+zip -r "$OUTPUT_PATH" "${RELATIVE_TARGETS[@]}" >/dev/null
+
+# 6. Trigger system notification on success
+notify-send \
+    -i package-x-generic \
+    "ZIP Archive" \
+    "Successfully created: $OUTPUT_NAME"

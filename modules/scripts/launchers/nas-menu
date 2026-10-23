@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+
+# NAS menu.
+#
+# The list is rendered by the shell's launcher (`qs-popup menu nas`) instead of a dmenu of its own:
+# one launcher UI on the machine, keyboard-first, and no extra Qt process per open. The format is
+# "<label>|<command>"; anything after the pipe runs through `sh -c`.
+#
+# qs-popup is not on PATH (the niri binds call it by absolute path too), so the path is explicit.
+
+set -u
+
+runtime="${XDG_RUNTIME_DIR:-/tmp}"
+qs_popup="${HOME}/System/.config/quickshell/scripts/qs-popup"
+
+# Every entry runs inside ghostty with --wait-after-command, so the window stays open after the
+# script exits. Without it a recovery that printed its result disappeared with the terminal, which is
+# why these felt useless from the launcher.
+cat >"$runtime/qs-menu-nas" <<'EOF'
+NAS Check|ghostty --wait-after-command=true -e nas-recover --check
+NAS Recover|ghostty --wait-after-command=true -e nas-recover
+Archive Home Folder to NAS|ghostty --wait-after-command=true -e archive-home-folders-to-nas
+EOF
+
+exec "$qs_popup" "menu nas"

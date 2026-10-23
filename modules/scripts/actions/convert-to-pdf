@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+
+# ==============================================================================
+# Script Name: PDF Converter
+# Description: Converts images, text, and Office documents to PDF
+# ==============================================================================
+
+set -euo pipefail
+
+for FILE in "$@"; do
+
+    [[ -f "$FILE" ]] || continue
+
+    EXT="${FILE##*.}"
+    EXT="${EXT,,}"
+
+    OUTPUT="${FILE%.*}.pdf"
+
+    case "$EXT" in
+
+        md|txt)
+
+            pandoc \
+                "$FILE" \
+                --pdf-engine=tectonic \
+                -o "$OUTPUT"
+            ;;
+
+        doc|docx|odt|rtf|ppt|pptx|xls|xlsx)
+
+            soffice \
+                --headless \
+                --convert-to pdf \
+                --outdir "$(dirname "$FILE")" \
+                "$FILE" >/dev/null
+            ;;
+
+        jpg|jpeg|png|tif|tiff)
+
+            img2pdf \
+                "$FILE" \
+                -o "$OUTPUT"
+            ;;
+
+        *)
+
+            notify-send \
+                -i dialog-error \
+                "Convert to PDF" \
+                "Unsupported format: $(basename "$FILE")"
+
+            continue
+            ;;
+    esac
+
+done
+
+notify-send \
+    -i application-pdf \
+    "Convert to PDF" \
+    "Conversion complete."

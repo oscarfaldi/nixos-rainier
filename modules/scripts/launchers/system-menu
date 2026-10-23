@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+
+# System menu: the NixOS maintenance commands.
+#
+# Rendered by the shell's launcher (`qs-popup menu system`) instead of a dmenu of its own, so every menu
+# on the machine is the same UI. The format is "<label>|<command>"; anything after the pipe runs
+# through `sh -c`.
+
+set -u
+
+runtime="${XDG_RUNTIME_DIR:-/tmp}"
+qs_popup="${HOME}/System/.config/quickshell/scripts/qs-popup"
+
+cat >"$runtime/qs-menu-system" <<'EOF'
+Rebuild|ghostty -e rebuild
+Rebuild Boot|ghostty -e rebuild-boot
+Upgrade|ghostty -e upgrade
+Clean|ghostty -e clean
+NixOS Version|ghostty -e version
+EOF
+
+exec "$qs_popup" "menu system"

@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+
+# ==============================================================================
+# Script Name: WebP Image Converter
+# Description: Converts selected images to WebP format via Thunar Custom Actions
+# ==============================================================================
+
+set -euo pipefail
+
+# 0. Safety Check: Ensure at least one file was selected
+if [[ $# -eq 0 ]]; then
+    notify-send -i dialog-error "WebP Conversion" "No file selected."
+    exit 1
+fi
+
+SUCCESS=0
+FAILED=0
+SKIPPED=0
+
+# 1. Convert every selected image
+for FILE in "$@"; do
+    DIR="$(dirname "$FILE")"
+    NAME="$(basename "$FILE")"
+    EXT="${NAME##*.}"
+    OUTPUT="${DIR}/${NAME%.*}.webp"
+
+    # A .webp source would be written over itself - skip it instead of re-encoding in place.
+    if [[ "${EXT,,}" == "webp" ]]; then
+        ((++SKIPPED))
+        continue
+    fi
+
+    # -q 82 is the usual "visually lossless enough" point for photos; -m 6 spends more CPU on
+    # compression for a smaller file, which is cheap for a handful of images. -metadata all keeps
+    # EXIF/ICC so colours and orientation survive the conversion.
+    if cwebp \
+        -q 82 \
+        -m 6 \
+        -metadata all \
+        "$FILE" \
+        -o "$OUTPUT" >/dev/null 2>&1
+    then
+        ((++SUCCESS))
+    else
+        ((++FAILED))
+    fi
+done
+
+# 2. Trigger system notification
+if (( FAILED == 0 )); then
+    if (( SKIPPED > 0 )); then
+        notify-send \
+            -i image-x-generic \
+            "WebP Conversion" \
+            "$SUCCESS image(s) converted, $SKIPPED already WebP."
+    else
+        notify-send \
+            -i image-x-generic \
+            "WebP Conversion" \
+            "$SUCCESS image(s) converted successfully."
+    fi
+else
+    notify-send \
+        -i dialog-warning \
+        "WebP Conversion" \
+        "$SUCCESS succeeded, $FAILED failed, $SKIPPED skipped."
+fi

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Themes
+Comment=Switch the desktop palette and wallpaper
+Exec=themes-menu
+Icon=preferences-desktop-theme
+Terminal=false
+Categories=Settings;DesktopSettings;
+StartupNotify=false

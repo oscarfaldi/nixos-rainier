@@ -1,0 +1,744 @@
+#!/usr/bin/env bash
+
+# ============================================================
+# theme-apply <theme> [--no-rotate] [--restore]
+#
+# Apply a colour theme across everything that can change at runtime.
+#
+# WHY THIS IS A SCRIPT AND NOT NIX:
+# Home Manager writes its files as read-only symlinks into /nix/store, so nothing at runtime can
+# touch them. Theming is therefore split in two, the same way Omarchy does it:
+#
+#   static (Nix)  packages, fonts, and a POINTER to a file in the state dir
+#                 (ghostty's `theme = <absolute path>`, btop's `qs.theme` symlink, the shell's
+#                 theme.json). These never change on a switch.
+#   runtime (here) colours, wallpaper and the rendered app configs, all under
+#                 $XDG_STATE_HOME/theme/ - writable, and untouched by a rebuild.
+#
+# Switching a theme is: render the state files, point the wallpaper at the theme's own background,
+# reload the apps that read those files. No rebuild, no generation to build.
+#
+# Themes come from two roots, user first:
+#   ~/.local/share/qs-palettes-user/<name>/   writable: tweak or drop a community theme here
+#   /etc/qs-palettes/<name>/                  official, read-only from the repo
+# ============================================================
+
+set -uo pipefail
+
+# One switch at a time. A cold palette takes ~25 s to generate (GTK CSS + ~1000 icon links), and a
+# second keypress while that runs used to interleave the writes: the desktop flashed one palette and
+# settled on another. Waiting for the lock keeps the last keypress the one that wins.
+if command -v flock >/dev/null 2>&1; then
+    exec 9>"${XDG_RUNTIME_DIR:-/tmp}/theme-apply.lock"
+    flock -w 120 9 || true
+fi
+
+state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/theme"
+official_dir="/etc/qs-palettes"
+user_dir="$HOME/.local/share/qs-palettes-user"
+vault="$HOME/Obsidian Vault/Oscar Faldi"
+
+name=""
+rotate=1
+
+die() { echo "theme-apply: $*" >&2; exit 1; }
+
+while (( $# )); do
+    case "$1" in
+        --no-rotate) rotate=0 ;;
+        --restore)   rotate=0 ;;
+        -*)          die "unknown option: $1" ;;
+        *)           name="$1" ;;
+    esac
+    shift
+done
+
+[[ -n "$name" ]] || die "usage: theme-apply <theme> [--no-rotate]"
+
+# ---------------------------------------------------------------- resolve the theme
+
+if [[ -f "$user_dir/$name/colors.toml" ]]; then
+    theme_dir="$user_dir/$name"
+elif [[ -f "$official_dir/$name/colors.toml" ]]; then
+    theme_dir="$official_dir/$name"
+else
+    die "unknown theme: $name (looked in $user_dir and $official_dir)"
+fi
+
+colors="$theme_dir/colors.toml"
+previous_name="$(cat "$state_dir/current" 2>/dev/null || true)"
+
+mkdir -p "$state_dir/wallpapers" "$user_dir"
+
+# ---------------------------------------------------------------- palette
+
+pal() {
+    sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$colors" | head -1
+}
+
+background=$(pal background)
+foreground=$(pal foreground)
+dark_background=$(pal dark_background)
+darker_background=$(pal darker_background)
+lighter_background=$(pal lighter_background)
+dark_foreground=$(pal dark_foreground)
+light_foreground=$(pal light_foreground)
+bright_foreground=$(pal bright_foreground)
+muted=$(pal muted)
+selection=$(pal selection)
+accent=$(pal accent)
+red=$(pal red)
+green=$(pal green)
+yellow=$(pal yellow)
+orange=$(pal orange)
+blue=$(pal blue)
+cyan=$(pal cyan)
+magenta=$(pal magenta)
+brown=$(pal brown)
+bright_red=$(pal bright_red)
+bright_green=$(pal bright_green)
+bright_yellow=$(pal bright_yellow)
+bright_blue=$(pal bright_blue)
+bright_cyan=$(pal bright_cyan)
+bright_magenta=$(pal bright_magenta)
+
+[[ -n "$background" && -n "$foreground" ]] || die "$colors has no background/foreground"
+
+# GTK 3.24's Adwaita is built from LITERAL hex values - its CSS defines `theme_bg_color` but never
+# references it - so @define-color overrides cannot recolour it (verified: the string appears 4x in
+# libgtk, only as a definition). A palette therefore has to name a REAL GTK theme, and `gtk_theme`
+# in colors.toml is that name.
+gtk_theme=$(pal gtk_theme)
+[[ -n "$gtk_theme" ]] || gtk_theme="Adwaita-dark"
+
+# Icons are per-palette too: gruvbox ships its own icon set, nord reads best with Papirus.
+gtk_icons=$(pal gtk_icons)
+[[ -n "$gtk_icons" ]] || gtk_icons="Papirus-Dark"
+
+# Window border colours. NOT foreground/muted: `muted` is a text tone, and on a dark wallpaper a
+# dark muted border reads as "there is no border at all" (that is exactly how the border seemed to
+# disappear after the theme moved it here). The palette names both explicitly, falling back to
+# light_foreground / a mid tone only when a theme leaves them out.
+border_active=$(pal border_active)
+[[ -n "$border_active" ]] || border_active="$foreground"
+border_inactive=$(pal border_inactive)
+[[ -n "$border_inactive" ]] || border_inactive="${light_foreground:-$foreground}"
+
+# Aliases the templates expect but colors.toml does not carry under that name.
+selection_background="$selection"
+[[ -n "$selection_background" ]] || selection_background="$lighter_background"
+[[ -n "$brown" ]] || brown="$orange"
+[[ -n "$bright_foreground" ]] || bright_foreground="$light_foreground"
+
+# ---------------------------------------------------------------- state: one source of truth
+
+ln -sfn "$colors" "$state_dir/colors.toml"
+printf '%s\n' "$name" >"$state_dir/current"
+
+# The shell reads this file; every property there maps to a role it already used.
+# Popup/panel surface. Palettes that do not define `panel` fall back to the plain background, so
+# they behave exactly as before; a palette whose background is near-black can lift the popups
+# without touching the window background.
+panel="$(pal panel)"
+[[ -n "$panel" ]] || panel="$background"
+
+cat >"$state_dir/theme.json" <<EOF
+{
+  "name": "$name",
+  "background": "$background",
+  "panel": "$panel",
+  "foreground": "$foreground",
+  "muted": "$muted",
+  "accent": "$accent",
+  "selection": "$selection",
+  "warning": "$red",
+  "success": "$green"
+}
+EOF
+
+# ---------------------------------------------------------------- ghostty
+
+# Ghostty accepts an absolute path as `theme`, so the static config only points here.
+# Same reasoning as niri.kdl: ghostty reads this through `theme = <path>` at startup.
+cat >"$state_dir/ghostty.tmp" <<EOF
+background = $background
+foreground = $foreground
+cursor-color = $accent
+cursor-text = $background
+selection-background = $selection_background
+selection-foreground = $foreground
+palette = 0=$darker_background
+palette = 1=$red
+palette = 2=$green
+palette = 3=$yellow
+palette = 4=$blue
+palette = 5=$magenta
+palette = 6=$cyan
+palette = 7=$light_foreground
+palette = 8=$muted
+palette = 9=$bright_red
+palette = 10=$bright_green
+palette = 11=$bright_yellow
+palette = 12=$bright_blue
+palette = 13=$bright_magenta
+palette = 14=$bright_cyan
+palette = 15=$bright_foreground
+EOF
+mv -f "$state_dir/ghostty.tmp" "$state_dir/ghostty"
+
+# ---------------------------------------------------------------- btop
+
+# btop looks themes up by NAME in its own themes dir, so the generated file is linked there and
+# btop.conf only carries `color_theme = "qs"` (set once by Nix, editable by btop itself).
+cat >"$state_dir/btop.theme" <<EOF
+theme[main_bg]="$background"
+theme[main_fg]="$foreground"
+theme[title]="$foreground"
+theme[hi_fg]="$accent"
+theme[selected_bg]="$selection"
+theme[selected_fg]="$accent"
+theme[inactive_fg]="$muted"
+theme[graph_text]="$light_foreground"
+theme[meter_bg]="$selection"
+theme[proc_misc]="$light_foreground"
+theme[cpu_box]="$magenta"
+theme[mem_box]="$green"
+theme[net_box]="$red"
+theme[proc_box]="$accent"
+theme[div_line]="$muted"
+theme[temp_start]="$green"
+theme[temp_mid]="$yellow"
+theme[temp_end]="$red"
+theme[cpu_start]="$cyan"
+theme[cpu_mid]="$blue"
+theme[cpu_end]="$magenta"
+theme[free_start]="$magenta"
+theme[free_mid]="$blue"
+theme[free_end]="$cyan"
+theme[cached_start]="$blue"
+theme[cached_mid]="$cyan"
+theme[cached_end]="$magenta"
+theme[available_start]="$yellow"
+theme[available_mid]="$red"
+theme[available_end]="$red"
+theme[used_start]="$green"
+theme[used_mid]="$cyan"
+theme[used_end]="$blue"
+theme[download_start]="$yellow"
+theme[download_mid]="$red"
+theme[download_end]="$red"
+theme[upload_start]="$green"
+theme[upload_mid]="$cyan"
+theme[upload_end]="$blue"
+theme[process_start]="$green"
+theme[process_mid]="$cyan"
+theme[process_end]="$blue"
+EOF
+
+btop_themes="$HOME/.config/btop/themes"
+mkdir -p "$btop_themes"
+ln -sfn "$state_dir/btop.theme" "$btop_themes/qs.theme"
+
+# btop OWNS its config: it rewrites btop.conf when it exits, so the file has to stay writable (no
+# Nix symlink). Point it at "qs" once, then leave the rest of the file to btop.
+btop_conf="$HOME/.config/btop/btop.conf"
+mkdir -p "$(dirname "$btop_conf")"
+if [[ ! -f "$btop_conf" ]]; then
+    printf 'color_theme = "qs"\n' >"$btop_conf"
+elif grep -q '^[[:space:]]*color_theme' "$btop_conf"; then
+    sed -i 's|^[[:space:]]*color_theme.*|color_theme = "qs"|' "$btop_conf"
+else
+    printf 'color_theme = "qs"\n' >>"$btop_conf"
+fi
+
+# btop paints its own background by default, which hides the terminal's transparency and makes the
+# darker palettes (rolex especially) look almost black. With theme_background off, btop draws on the
+# terminal background instead - so it matches ghostty's opacity and the popup surfaces.
+# btop defaults to a 2s refresh; a 1s tick makes the graphs usable at a glance.
+if grep -q '^[[:space:]]*update_ms' "$btop_conf"; then
+    sed -i 's|^[[:space:]]*update_ms.*|update_ms = 1000|' "$btop_conf"
+else
+    printf 'update_ms = 1000\n' >>"$btop_conf"
+fi
+
+if grep -q '^[[:space:]]*theme_background' "$btop_conf"; then
+    sed -i 's|^[[:space:]]*theme_background.*|theme_background = false|' "$btop_conf"
+else
+    printf 'theme_background = false\n' >>"$btop_conf"
+fi
+
+# ---------------------------------------------------------------- starship
+# The prompt keeps its own rainbow layout; only the palette is swapped. `theme-prompt-palette` derives
+# the block colours from the theme (background mixed with the accent at a fixed ladder), because the
+# prompt draws light text on those blocks and palette ROLES cannot guarantee they are dark enough -
+# gruvbox's accent is a pale cream, which made its own prompt text unreadable (1.02:1). starship
+# re-reads its config for every prompt, so a switch lands on the next Enter.
+starship_src="$HOME/.config/starship.toml"
+starship_out="$state_dir/starship.toml"
+if [[ -r "$starship_src" ]]; then
+    sed 's/^palette = "gruvbox_dark"$/palette = "qs"/' "$starship_src" >"$starship_out" 2>/dev/null || true
+    printf '\n' >>"$starship_out"
+    theme-prompt-palette "$colors" >>"$starship_out" 2>>"$state_dir/starship.log" || true
+fi
+
+# Keep the appearance bits out of Syncthing: the vault is two-way synced with the phone and the NAS,
+# and this styling is meant for THIS machine (a snippet written for a desktop window on a phone is
+# noise, and two devices writing appearance.json fight each other).
+if [[ -d "$vault/.obsidian" && ! -f "$vault/.stignore" ]]; then
+    {
+        echo "# Obsidian appearance is per-machine: this PC writes its theme into .obsidian/."
+        echo ".obsidian/appearance.json"
+        echo ".obsidian/snippets/"
+    } >"$vault/.stignore"
+fi
+
+# ---------------------------------------------------------------- obsidian
+
+# A CSS SNIPPET, not a theme: the vault keeps whatever community theme is installed and this file
+# only overrides its colours. Written into the vault because Obsidian only loads snippets from
+# <vault>/.obsidian/snippets/; the vault's .stignore keeps it out of Syncthing so it stays local.
+if [[ -d "$vault/.obsidian" ]]; then
+    snippet_dir="$vault/.obsidian/snippets"
+    mkdir -p "$snippet_dir"
+
+    cat >"$snippet_dir/qs-theme.css" <<EOF
+/* Generated by theme-apply - theme: $name. Do not edit, it is rewritten on every switch. */
+.theme-dark, .theme-light {
+  --background-primary: $background;
+  --background-primary-alt: $background;
+  --background-secondary: $background;
+  --background-secondary-alt: $background;
+  --text-normal: $foreground;
+  --text-selection: $selection_background;
+  --background-modifier-border: $muted;
+  --text-title-h1: $red;
+  --text-title-h2: $green;
+  --text-title-h3: $yellow;
+  --text-title-h4: $blue;
+  --text-title-h5: $magenta;
+  --text-title-h6: $magenta;
+  --text-link: $blue;
+  --text-accent: $accent;
+  --text-accent-hover: $accent;
+  --interactive-accent: $accent;
+  --interactive-accent-hover: $accent;
+  --text-muted: color-mix(in srgb, $foreground 70%, transparent);
+  --text-faint: color-mix(in srgb, $foreground 55%, transparent);
+  --code-normal: $cyan;
+  --text-error: $red;
+  --text-error-hover: $red;
+  --text-success: $green;
+  --tag-color: $cyan;
+  --tag-background: $muted;
+  --graph-line: $muted;
+  --graph-node: $accent;
+  --graph-node-focused: $blue;
+  --graph-node-tag: $cyan;
+  --graph-node-attachment: $green;
+}
+
+.cm-header-1, .markdown-rendered h1 { color: var(--text-title-h1); }
+.cm-header-2, .markdown-rendered h2 { color: var(--text-title-h2); }
+.cm-header-3, .markdown-rendered h3 { color: var(--text-title-h3); }
+.cm-header-4, .markdown-rendered h4 { color: var(--text-title-h4); }
+.cm-header-5, .markdown-rendered h5 { color: var(--text-title-h5); }
+.cm-header-6, .markdown-rendered h6 { color: var(--text-title-h6); }
+
+.markdown-rendered code { color: $cyan; }
+.cm-s-obsidian span.cm-keyword { color: $red; }
+.cm-s-obsidian span.cm-string { color: $green; }
+.cm-s-obsidian span.cm-number { color: $yellow; }
+.cm-s-obsidian span.cm-comment { color: $muted; }
+.cm-s-obsidian span.cm-operator { color: $blue; }
+.cm-s-obsidian span.cm-def { color: $blue; }
+.markdown-rendered a { color: var(--text-link); }
+.markdown-rendered blockquote { border-left-color: $accent; }
+.workspace-leaf.mod-active .workspace-leaf-header-title { color: var(--interactive-accent); }
+.nav-file-title.is-active { color: var(--interactive-accent); }
+.search-result-file-title { color: var(--interactive-accent); }
+EOF
+
+    # Enable the snippet once. Obsidian then reloads it whenever the file changes.
+    appearance="$vault/.obsidian/appearance.json"
+    if [[ -f "$appearance" ]] && command -v jq >/dev/null 2>&1; then
+        if ! jq -e '.enabledCssSnippets // [] | index("qs-theme")' "$appearance" >/dev/null 2>&1; then
+            tmp="$(mktemp)"
+            jq '.enabledCssSnippets = ((.enabledCssSnippets // []) + ["qs-theme"] | unique)' \
+                "$appearance" >"$tmp" 2>/dev/null && mv "$tmp" "$appearance" || rm -f "$tmp"
+        fi
+    fi
+fi
+
+# ---------------------------------------------------------------- wallpaper
+
+# Wallpapers come from the theme itself AND from a matching folder under themes-user, so adding or
+# deleting a background never needs a rebuild: drop it in
+# ~/.local/share/qs-palettes-user/<theme>/backgrounds/ and it is picked up on the next apply.
+overlay_dir="$user_dir/$name/backgrounds"
+
+collect_wallpapers() {
+    find -L "$1" -maxdepth 1 -type f \
+        \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' \) 2>/dev/null
+}
+
+mapfile -t wallpapers < <(
+    {
+        collect_wallpapers "$theme_dir/backgrounds"
+        collect_wallpapers "$overlay_dir"
+    } | sort -u
+)
+
+# A user overlay shadows the official palette, so a half-deleted overlay (dangling symlinks to
+# backgrounds that no longer exist) used to leave this array EMPTY and silently freeze the
+# wallpaper at whatever theme was active before. Fall back to the official backgrounds instead.
+if (( ${#wallpapers[@]} == 0 )) && [[ -d "$official_dir/$name/backgrounds" && "$theme_dir" != "$official_dir/$name" ]]; then
+    mapfile -t wallpapers < <(collect_wallpapers "$official_dir/$name/backgrounds" | sort -u)
+fi
+
+wallpaper=""
+remembered_file="$state_dir/wallpapers/$name"
+
+if (( ${#wallpapers[@]} > 0 )); then
+    remembered="$(cat "$remembered_file" 2>/dev/null || true)"
+    index=-1
+
+    for i in "${!wallpapers[@]}"; do
+        [[ "${wallpapers[$i]}" == "$remembered" ]] && index=$i
+    done
+
+    if (( rotate )) && [[ "$previous_name" == "$name" ]] && (( index >= 0 )); then
+        # Same theme chosen again: step to the next background, which is Omarchy's behaviour.
+        wallpaper="${wallpapers[$(((index + 1) % ${#wallpapers[@]}))]}"
+    elif (( index >= 0 )); then
+        wallpaper="$remembered"
+    else
+        wallpaper="${wallpapers[0]}"
+    fi
+
+    printf '%s\n' "$wallpaper" >"$remembered_file"
+    printf '%s\n' "$wallpaper" >"$state_dir/wallpaper"
+    ln -sfn "$wallpaper" "$state_dir/wallpaper.link"
+fi
+
+# ---------------------------------------------------------------- lock screen background
+# Blurred once per switch. The lock screen then only has to display an image, instead of blurring a
+# 2.5k frame in QML every time the session locks.
+if [[ -n "$wallpaper" && -f "$wallpaper" ]]; then
+    magick "$wallpaper" -resize 1920x -blur 0x16 -modulate 92 "$state_dir/lock-bg.jpg" 2>/dev/null || true
+fi
+
+# ---------------------------------------------------------------- GTK
+
+# ---------------------------------------------------------------- GTK theme from the palette
+
+# Palettes with no native GTK theme of their own (`generate_gtk = true`) get one built here: a complete
+# base theme is copied into ~/.local/share/themes/qs-<palette> and every one of its colours is
+# rewritten to the palette role that matches. That is what makes a generated palette reach GTK
+# apps AND browser chrome (Firefox/Chromium paint their UI with the GTK theme) without anyone
+# hand-writing a theme.
+#
+# Fallbacks, in order: base theme missing -> the palette's own `gtk_theme`, which is Adwaita-dark for
+# at all. A generation failure can therefore never leave GTK light or unstyled.
+if [[ "$(pal generate_gtk)" == "true" ]]; then
+    base_name=$(pal gtk_base)
+    [[ -n "$base_name" ]] || base_name="Nordic"
+
+    base_dir=""
+    for _d in "/etc" "$HOME/.local/share" \
+              ${XDG_DATA_DIRS//:/ } /run/current-system/sw/share \
+              "/etc/profiles/per-user/$(id -un)/share"; do
+        if [[ -d "$_d/themes/$base_name/gtk-3.0" ]]; then
+            base_dir="$_d/themes/$base_name"
+            break
+        fi
+    done
+
+    if [[ -n "$base_dir" ]]; then
+        gen_theme="qs-$name"
+        gen_dir="$HOME/.local/share/themes/$gen_theme"
+        mkdir -p "$HOME/.local/share/themes"
+
+        # Generating costs ~5-9s (4 MB theme copied + ~1000 icon links). Switching back to a palette
+        # that was already generated must not pay that again: the palette file's hash is the cache key.
+        gen_key=$(sha256sum "$colors" | cut -c1-16)
+        if [[ -f "$gen_dir/.qs-palette" && "$(cat "$gen_dir/.qs-palette" 2>/dev/null)" == "$gen_key" && -f "$gen_dir/gtk-3.0/gtk.css" ]]; then
+            gtk_theme="$gen_theme"
+            echo "theme-apply: reusing generated GTK theme $gen_theme"
+            gen_cached=1
+        else
+        gen_cached=0
+        rm -rf "$gen_dir"
+        cp -rL "$base_dir" "$gen_dir"
+        # Dirs first (sed needs to create a temp file next to the CSS), then regular files only:
+        # the base theme ships symlinks into the store and chmod would fail following them.
+        find "$gen_dir" -type d -exec chmod u+w {} +
+        find "$gen_dir" -type f -exec chmod u+w {} +
+
+        # Colour mapping is done by theme-gtk-recolor (luminance ramp for greys, nearest hue for
+        # accents). A static hex table was tried first and cannot work: the base theme carries ~100
+        # grey shades, and every shade missing from the table stayed grey - Thunar's sidebar kept the
+        # old theme's grey that way.
+        theme-gtk-recolor "$gen_dir" "$colors" || \
+            echo "theme-apply: recolour helper failed, keeping the base colours" >&2
+
+        sed -i "s/^Name=.*/Name=$gen_theme/" "$gen_dir/index.theme" 2>/dev/null || true
+        printf '%s\n' "$gen_key" >"$gen_dir/.qs-palette"
+        gtk_theme="$gen_theme"
+        fi
+    else
+        echo "theme-apply: base GTK theme '$base_name' not found, using ${gtk_theme}" >&2
+    fi
+fi
+
+
+# GTK reads settings.ini at startup and, with no XSettings daemon running, it is the highest priority
+# source - which is what makes the theme name swappable at runtime. GTK has no theme hot reload, so an
+# open app keeps the old colours until it is restarted.
+#
+# A missing theme is checked for FIRST: naming a theme that is not installed sends every GTK app to
+# the stock light fallback, which looks like "theming is broken" rather than "wrong name".
+gtk_found=0
+# Build the search list from XDG_DATA_DIRS plus the paths this system actually uses. NOT from $USER:
+# when the script is launched from the shell or the IPC daemon $USER can be empty, which made every
+# name look missing and silently forced the Adwaita fallback.
+_search="$HOME/.local/state/nix/profile/share:$HOME/.nix-profile/share:${XDG_DATA_DIRS:-}:$HOME/.local/share"
+_search="$_search:/etc/profiles/per-user/$(id -un)/share:/run/current-system/sw/share"
+IFS=: read -r -a _dirs <<<"$_search"
+for _d in "${_dirs[@]}"; do
+    [[ -n "$_d" && -d "$_d/themes/$gtk_theme" ]] && { gtk_found=1; break; }
+done
+
+if (( ! gtk_found )); then
+    echo "theme-apply: GTK theme '$gtk_theme' is not installed, falling back to Adwaita-dark" >&2
+    gtk_theme="Adwaita-dark"
+fi
+
+mkdir -p "$HOME/.config/gtk-3.0" "$HOME/.config/gtk-4.0"
+for _dir in "$HOME/.config/gtk-3.0" "$HOME/.config/gtk-4.0"; do
+    rm -f "$_dir/settings.ini"
+    cat >"$_dir/settings.ini" <<EOF
+[Settings]
+gtk-theme-name=$gtk_theme
+gtk-icon-theme-name=$gtk_icons
+gtk-cursor-theme-name=Bibata-Modern-Ice
+gtk-font-name=JetBrainsMono Nerd Font 11
+gtk-application-prefer-dark-theme=1
+gtk-menu-images=1
+EOF
+done
+
+# ---------------------------------------------------------------- icons from the palette
+
+# Papirus ships every folder icon as a symlink to a colour variant: folder.svg -> folder-blue.svg,
+# user-home.svg -> user-blue-home.svg, folder-documents.svg -> folder-blue-documents.svg. A palette
+# that asks for it therefore gets a derived icon theme that only RE-POINTS those symlinks at the
+# matching colour variant and inherits everything else from Papirus-Dark. Nothing is copied and
+# nothing is recoloured, which is why this cannot produce muddy artwork.
+if [[ "$(pal generate_icons)" == "true" ]]; then
+    icon_color=$(pal icons_color)
+    [[ -n "$icon_color" ]] || icon_color="green"
+
+    papirus=""
+    for _d in "$HOME/.local/share/icons" ${XDG_DATA_DIRS//:/ } /run/current-system/sw/share \
+              "/etc/profiles/per-user/$(id -un)/share" "$HOME/.nix-profile/share"; do
+        if [[ -d "$_d/icons/Papirus-Dark" ]]; then
+            papirus=$(readlink -f "$_d/icons/Papirus-Dark")
+            break
+        fi
+    done
+
+    if [[ -n "$papirus" ]]; then
+        icon_theme="qs-$name"
+        icon_dir="$HOME/.local/share/icons/$icon_theme"
+        icon_key="$(sha256sum "$colors" | cut -c1-16)-$icon_color"
+        if [[ -f "$icon_dir/.qs-keys" && "$(cat "$icon_dir/.qs-keys" 2>/dev/null)" == "$icon_key" ]]; then
+            gtk_icons="$icon_theme"
+            echo "theme-apply: reusing generated icon theme $icon_theme"
+            icon_cached=1
+        else
+        icon_cached=0
+        rm -rf "$icon_dir"
+        mkdir -p "$icon_dir"
+        cp "$papirus/index.theme" "$icon_dir/index.theme"
+        sed -i "s/^Name=.*/Name=$icon_theme/" "$icon_dir/index.theme"
+        grep -q '^Inherits=' "$icon_dir/index.theme" || printf 'Inherits=Papirus-Dark\n' >>"$icon_dir/index.theme"
+
+        made=0
+        # Glob the size directories instead of find: both Papirus-Dark and its size dirs are symlinks
+        # into the store, and find neither follows the root nor descends through a linked directory.
+        for sizedir in "$papirus"/*/places; do
+            [[ -d "$sizedir" ]] || continue
+            size=$(basename "$(dirname "$sizedir")")
+            real=$(readlink -f "$sizedir")
+            while IFS= read -r f; do
+                b=$(basename "$f")
+                case "$b" in
+                    folder.svg)             cand="folder-$icon_color.svg" ;;
+                    folder-*.svg)           cand="folder-$icon_color-${b#folder-}" ;;
+                    user-*.svg)             cand="user-$icon_color-${b#user-}" ;;
+                    inode-directory.svg)    cand="folder-$icon_color.svg" ;;
+                    *)                      continue ;;
+                esac
+                mkdir -p "$icon_dir/$size/places"
+
+                if [[ -e "$real/$cand" ]]; then
+                    ln -sfn "$real/$cand" "$icon_dir/$size/places/$b"
+                    made=$((made + 1))
+                    continue
+                fi
+
+                # No such colour variant (Papirus ships a few families only in blue/bluegrey, e.g.
+                # folder-bluegrey-public.svg). Leaving it out let the icon fall back to Papirus-Dark's
+                # BLUE artwork, which is why a single "public" folder showed up blue in an otherwise
+                # brown theme. Recolour the source SVG instead: each folder family carries exactly two
+                # paint colours (base + shade), so pairing them by order is enough and keeps the glyph.
+                family="${b#folder-}"
+                family="${family%%-*}"
+                [[ "$family" == "$icon_color" ]] && continue
+                src_generic="$real/folder-$family.svg"
+                dst_generic="$real/folder-$icon_color.svg"
+                [[ -r "$src_generic" && -r "$dst_generic" ]] || continue
+
+                mapfile -t _src < <(grep -oE '#[0-9a-fA-F]{6}' "$src_generic" | tr 'A-F' 'a-f' \
+                    | grep -vE '^#ffffff$|^#e4e4e4$' | awk '!seen[$0]++' | head -2)
+                mapfile -t _dst < <(grep -oE '#[0-9a-fA-F]{6}' "$dst_generic" | tr 'A-F' 'a-f' \
+                    | grep -vE '^#ffffff$|^#e4e4e4$' | awk '!seen[$0]++' | head -2)
+                (( ${#_src[@]} == 2 && ${#_dst[@]} == 2 )) || continue
+
+                sed -e "s/${_src[0]}/${_dst[0]}/gI" -e "s/${_src[1]}/${_dst[1]}/gI" \
+                    "$(readlink -f "$f")" >"$icon_dir/$size/places/$b"
+                chmod u+w "$icon_dir/$size/places/$b"
+                made=$((made + 1))
+            done < <(find "$real" -maxdepth 1 -name '*.svg' -type l 2>/dev/null)
+        done
+
+        if (( made > 0 )); then
+            printf '%s\n' "$icon_key" >"$icon_dir/.qs-keys"
+            gtk_icons="$icon_theme"
+        else
+            echo "theme-apply: no '$icon_color' folder variants found, keeping $gtk_icons" >&2
+        fi
+        fi
+    else
+        echo "theme-apply: Papirus-Dark not found, keeping $gtk_icons" >&2
+    fi
+fi
+
+# ---------------------------------------------------------------- GTK row metrics
+
+# Row spacing for tree views, METRICS ONLY (no colours), so it sits on top of any theme.
+#
+# Only the separator is used, deliberately. `padding` was tried to close the last few pixels against
+# Nordic-based themes, but Thunar's content pane is an ExoIconView - a GtkTreeView subclass - so the
+# padding inflated the icon grid too: folder rows went from ~21px to ~45px and every theme looked
+# broken. The separator affects row spacing without resizing the icon cells.
+#
+# Left over from that attempt: gruvbox-dark keeps its own tighter row metrics (30px vs 34px in
+# the other palettes, icons 6px less indented). That 4px is not worth breaking the content pane for.
+mkdir -p "$HOME/.config/gtk-3.0"
+cat >"$HOME/.config/gtk-3.0/gtk.css" <<'EOF'
+/* Generated by theme-apply - row metrics only, no colours. Do not edit. */
+treeview.view {
+    -GtkTreeView-vertical-separator: 6px;
+    -GtkTreeView-horizontal-separator: 1px;
+}
+
+/* Thunar's SIDEBAR only. Nordic (the base of the generated themes) carries exactly this padding, and
+   it is the reason its rows measured 34px while a packaged theme like gruvbox-dark measured 30px:
+   the last 4px do not come from the treeview separator but from a padding scoped to Thunar's sidebar.
+   The selector requires `.sidebar`, so the content pane - an ExoIconView inside plain scrolledwindow,
+   which blew up 21px -> 45px when padding was applied globally - is untouched. */
+.thunar scrolledwindow.sidebar treeview.view {
+    padding: 1.5px;
+}
+EOF
+
+# GTK in dark mode reads gtk-dark.css; a rule only in gtk.css is silently ignored.
+cp "$HOME/.config/gtk-3.0/gtk.css" "$HOME/.config/gtk-3.0/gtk-dark.css"
+
+# GSettings is what the apps actually read here (settings.ini alone left the font and the icons at
+# their defaults - the "font is not JetBrains, icons fell back" symptom), so every appearance key
+# has to be written twice: settings.ini for GTK, dconf for anything going through GSettings.
+dconf write /org/gnome/desktop/interface/gtk-theme "\"$gtk_theme\"" >/dev/null 2>&1 || true
+dconf write /org/gnome/desktop/interface/icon-theme "\"$gtk_icons\"" >/dev/null 2>&1 || true
+dconf write /org/gnome/desktop/interface/cursor-theme "\"Bibata-Modern-Ice\"" >/dev/null 2>&1 || true
+dconf write /org/gnome/desktop/interface/font-name "\"JetBrainsMono Nerd Font 11\"" >/dev/null 2>&1 || true
+dconf write /org/gnome/desktop/interface/monospace-font-name "\"JetBrainsMono Nerd Font 11\"" >/dev/null 2>&1 || true
+
+# The palette CSS was only for the @define-color attempt, which this GTK cannot honour.
+rm -f "$state_dir/gtk.css"
+
+
+# ---------------------------------------------------------------- apply
+
+# Ask the daemon itself instead of guessing at its process name: the package installs a wrapper, so
+# `pgrep -x awww-daemon` never matches (comm comes out as `.awww-daemon-wr`) and the wallpaper was
+# silently skipped on every switch.
+if awww query >/dev/null 2>&1; then
+    [[ -n "$wallpaper" && -f "$wallpaper" ]] && {
+        # Never swallow the result: right after the daemon starts, the client can lose the race and get
+        # "failed to write message: Broken pipe", which exits 1 and applies nothing.
+        tries=0
+        while (( tries < 10 )); do
+            if (( rotate )); then
+                awww img "$wallpaper" --resize crop --transition-type fade --transition-duration 4.0 \
+                    --transition-fps 60 --transition-bezier ".33,0,.2,1" >/dev/null 2>&1 \
+                    && break
+            else
+                awww img "$wallpaper" --resize crop --transition-type none >/dev/null 2>&1 && break
+            fi
+            tries=$((tries + 1))
+            sleep 0.5
+        done
+        (( tries >= 10 )) && echo "theme-apply: warning: awww img kept failing (daemon not accepting images)" >&2
+    }
+else
+    # Not our job to start the daemon: wallpaper-session does that at login, and a switch before
+    # then is not worth spawning it behind the session's back.
+    :
+fi
+
+# ---------------------------------------------------------------- niri window border
+
+# config.kdl ends with `include` of this file, so the border colours follow the palette without a
+# rebuild: niri re-reads the whole config on IPC, and only the layout.border keys live here.
+niri_file="$state_dir/niri.kdl"
+# Written to a temp file and renamed: niri reads this file through `include`, and a truncated
+# file (interrupted switch, full disk) makes the whole niri config invalid - which is a session
+# with no keybinds. rename(2) is atomic, so readers only ever see a complete file.
+cat >"$niri_file.tmp" <<EOF
+// Generated by theme-apply - theme: $name. Do not edit, it is rewritten on every switch.
+layout {
+    border {
+        // The 'on' line is REQUIRED here: niri treats a border section in an INCLUDED file differently from
+        // one in the main config: in the main config writing border {} enables it, in an include it
+        // does nothing. Without this line the border silently disappears when it moves here.
+        on
+        width 2
+        active-color "$border_active"
+        inactive-color "$border_inactive"
+    }
+}
+EOF
+mv -f "$niri_file.tmp" "$niri_file"
+niri msg action load-config-file >/dev/null 2>&1 || true
+
+# btop reloads its theme in place on SIGUSR2 (~10 ms). No btop running is not a failure.
+pkill -SIGUSR2 -x btop >/dev/null 2>&1 || true
+
+# Running Ghostty windows pick the new palette up from the same absolute path.
+ghostty +reload_config >/dev/null 2>&1 || true
+
+# The shell: write the queue line the same way qs-popup does, then it re-reads theme.json.
+runtime="${XDG_RUNTIME_DIR:-/tmp}"
+shell_pid=""
+[[ -r "$runtime/quickshell-shell.pid" ]] && { read -r shell_pid <"$runtime/quickshell-shell.pid" || true; }
+if [[ -n "${shell_pid:-}" ]]; then
+    command_pipe="$runtime/quickshell-cmd-$shell_pid"
+    if [[ -p "$command_pipe" ]] && exec 3<>"$command_pipe"; then
+        echo "theme" >&3
+        exec 3>&-
+    fi
+fi
+
+echo "$name"

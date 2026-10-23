@@ -1,0 +1,720 @@
+#!/usr/bin/env bash
+
+# ==============================================================================
+# Rainier Initialization & Setup Script
+#
+# Description:
+#   Bootstraps a fresh NixOS installation into the complete Rainier system.
+#
+# Responsibilities:
+#   - Imports hardware-configuration.nix
+#   - Configures SMB credentials
+#   - Optionally restores Syncthing identity from NAS
+#   - Optionally restores SSH identity from NAS
+#   - Performs the first NixOS rebuild using the ncps cache
+#   - Reboots into the completed system
+#
+# Syncthing bootstrap:
+#   - Uses smbclient directly
+#   - DOES NOT create a CIFS/kernel mount
+#   - DOES NOT depend on GVFS
+#   - Retrieves cert.pem and key.pem from the NAS
+#   - Stores them locally in ~/.config/syncthing/
+#   - Failure is NON-FATAL: installation continues with a warning
+#
+# Expected workflow:
+#
+#   git clone <repo>
+#   chmod +x install
+#   ./install
+#
+# The expected interactive input is the sudo password and, if the SMB
+# credential file does not already exist, the SMB username/password.
+# ==============================================================================
+
+set -euo pipefail
+
+export NIX_CONFIG="${NIX_CONFIG:-}
+experimental-features = nix-command flakes"
+
+# ------------------------------------------------------------------------------
+# Configuration
+# ------------------------------------------------------------------------------
+
+CONFIG_DIR="$HOME/System"
+
+# Point the configuration at whoever is running the installer. The repository ships "oscarfaldi" as a
+# default so it builds standalone, but a clone is expected to bootstrap its own machine: rewriting the
+# one value is what makes modules/identity.nix the only place that knows the account name.
+current_user="$(id -un)"
+if [[ "$current_user" != "oscarfaldi" ]]; then
+    sed -i "0,/default = \"oscarfaldi\";/s//default = \"$current_user\";/" \
+        "$CONFIG_DIR/modules/identity.nix"
+    echo "Configuration user set to: $current_user"
+fi
+
+if [[ ! -d "$CONFIG_DIR/.git" ]]; then
+    echo "✗ Not a git checkout: $CONFIG_DIR" >&2
+    exit 1
+fi
+
+cd "$CONFIG_DIR"
+
+SMB_CRED_FILE="/etc/smb-credentials"
+
+# NAS SMB share used ONLY for direct bootstrap access.
+# No filesystem mount is created.
+SMB_BOOTSTRAP_SHARE="//10.10.10.10/toolkit"
+SYNCTHING_REMOTE_DIR="Syncthing"
+SSH_REMOTE_DIR="SSH"
+
+# Local SSH identity.
+SSH_CONFIG_DIR="$HOME/.ssh"
+SSH_PRIVATE_KEY="$SSH_CONFIG_DIR/id_ed25519_cascade"
+SSH_PUBLIC_KEY="$SSH_CONFIG_DIR/id_ed25519_cascade.pub"
+
+# Local Syncthing identity.
+SYNCTHING_CONFIG_DIR="$HOME/.config/syncthing"
+SYNCTHING_CERT="$SYNCTHING_CONFIG_DIR/cert.pem"
+SYNCTHING_KEY="$SYNCTHING_CONFIG_DIR/key.pem"
+
+# Hardware configuration.
+HW_CONFIG_SRC="/etc/nixos/hardware-configuration.nix"
+HW_CONFIG_DST="$CONFIG_DIR/hardware-configuration.nix"
+
+# Bootstrap cache settings.
+# Must match nix.settings in configuration.nix.
+NIX_CACHE_SUBSTITUTERS="http://10.10.10.132:8501 https://cache.nixos.org"
+
+NIX_CACHE_TRUSTED_KEYS="glacier:UzkmMZRtnjiYaNB/X8Guih4cdla1RDkkNRhJVgeGKCk= cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY="
+
+# ------------------------------------------------------------------------------
+# UI Helpers
+# ------------------------------------------------------------------------------
+
+print_header() {
+    local title="$1"
+
+    echo
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo " $title"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo
+}
+
+
+print_warning() {
+    local message="$1"
+
+    echo
+    echo "⚠ WARNING"
+    echo "$message"
+    echo
+}
+
+# ------------------------------------------------------------------------------
+# Flake Inputs
+# ------------------------------------------------------------------------------
+
+report_pinned_revision() {
+    print_header "Flake Inputs"
+
+    # Install NEVER updates inputs. The repository's flake.lock is the state being reproduced, so a
+    # reinstall is fast (published binaries) and lands on exactly the same revision. Moving to a
+    # newer nixpkgs is a separate, deliberate action: run `upgrade` once the system is installed.
+    local rev
+    rev=$(nix eval --raw --impure --expr \
+        '(builtins.fromJSON (builtins.readFile '"$CONFIG_DIR"'/flake.lock)).nodes.nixpkgs.locked.rev' \
+        2>/dev/null | cut -c1-12 || true)
+
+    echo "Using the pinned revision from flake.lock${rev:+ (nixpkgs $rev)}."
+    echo "To move to the newest nixpkgs later, run: upgrade"
+}
+
+# ------------------------------------------------------------------------------
+# Hardware Configuration
+# ------------------------------------------------------------------------------
+
+import_hardware_config() {
+    print_header "Import Hardware Configuration"
+
+    if [[ -f "$HW_CONFIG_SRC" ]]; then
+        echo "Found hardware configuration in /etc/nixos."
+        echo "Copying to repository..."
+
+        cp "$HW_CONFIG_SRC" "$HW_CONFIG_DST"
+
+        echo "✓ Hardware configuration imported."
+    elif [[ -f "$HW_CONFIG_DST" ]]; then
+        echo "✓ hardware-configuration.nix already exists in repository."
+        echo "  Skipping import."
+    else
+        echo "✗ hardware-configuration.nix not found."
+
+        echo
+        echo "Checked:"
+        echo "  - $HW_CONFIG_SRC"
+        echo "  - $HW_CONFIG_DST"
+        echo
+
+        exit 1
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# Flake Hardware Configuration
+# ------------------------------------------------------------------------------
+
+prepare_hardware_for_flake() {
+    print_header "Prepare Flake Hardware Configuration"
+
+    echo "Making hardware-configuration.nix visible to the Git-backed flake..."
+    echo
+
+    if command -v git >/dev/null 2>&1; then
+        git -C "$CONFIG_DIR" add -N -- hardware-configuration.nix
+    else
+        echo "Git is not installed in the current system."
+        echo "Temporarily providing Git through nix-shell..."
+        echo
+
+        nix-shell -p git --run \
+            "git -C \"$CONFIG_DIR\" add -N -- hardware-configuration.nix"
+    fi
+
+    echo
+    echo "✓ hardware-configuration.nix is visible to the flake."
+}
+
+# ------------------------------------------------------------------------------
+# Repository Ownership
+# ------------------------------------------------------------------------------
+
+fix_ownership() {
+    print_header "Repository Ownership"
+
+    if find "$CONFIG_DIR" -user root -print -quit | grep -q .; then
+        echo "Root-owned files detected."
+        echo "Fixing repository ownership..."
+
+        sudo chown -R "$(id -un):$(id -gn)" "$CONFIG_DIR"
+
+        echo "✓ Ownership fixed."
+    else
+        echo "✓ Repository ownership already correct."
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# SMB Credentials
+# ------------------------------------------------------------------------------
+
+setup_smb_credentials() {
+    print_header "SMB Credentials Setup"
+
+    if [[ -f "$SMB_CRED_FILE" ]]; then
+        echo "✓ Existing SMB credentials found."
+        return
+    fi
+
+    echo "SMB credential file not found."
+    echo
+
+    read -rp "SMB Username: " SMB_USER
+    read -rsp "SMB Password: " SMB_PASS
+    echo
+
+    sudo tee "$SMB_CRED_FILE" >/dev/null <<EOF
+username=${SMB_USER}
+password=${SMB_PASS}
+EOF
+
+    sudo chmod 600 "$SMB_CRED_FILE"
+
+    echo
+    echo "✓ SMB credentials saved."
+}
+
+# ------------------------------------------------------------------------------
+# SSH Identity Bootstrap
+# ------------------------------------------------------------------------------
+#
+# IMPORTANT:
+# This function is intentionally NON-FATAL.
+# Failure to restore the SSH identity must NEVER stop the full NixOS install.
+# The function returns success even when bootstrap fails.
+# ------------------------------------------------------------------------------
+bootstrap_ssh_identity() {
+    print_header "SSH Identity Bootstrap"
+
+    # --------------------------------------------------------------------------
+    # Existing identity
+    # --------------------------------------------------------------------------
+    if [[ -f "$SSH_PRIVATE_KEY" && -f "$SSH_PUBLIC_KEY" ]]; then
+        echo "✓ Existing SSH identity found."
+        echo "  Skipping NAS restore."
+        return 0
+    fi
+
+    # --------------------------------------------------------------------------
+    # SMB credentials
+    # --------------------------------------------------------------------------
+    if [[ ! -f "$SMB_CRED_FILE" ]]; then
+        print_warning \
+            "SMB credentials are unavailable. \
+SSH identity will not be restored from NAS."
+        return 0
+    fi
+
+    # --------------------------------------------------------------------------
+    # Temporary directory
+    # --------------------------------------------------------------------------
+    local TEMP_DIR
+    if ! TEMP_DIR="$(mktemp -d)"; then
+        print_warning \
+            "Could not create a temporary directory. \
+SSH identity restore skipped."
+        return 0
+    fi
+
+    cleanup_ssh_bootstrap() {
+        rm -rf "$TEMP_DIR"
+    }
+    trap cleanup_ssh_bootstrap RETURN
+
+    # --------------------------------------------------------------------------
+    # Retrieve files from NAS.
+    #
+    # nix-shell is completely internal to this function.
+    # The user does NOT need to run nix-shell manually.
+    # --------------------------------------------------------------------------
+    echo "Attempting to restore SSH identity from NAS..."
+    echo
+    echo "  Share: $SMB_BOOTSTRAP_SHARE"
+    echo "  Path : $SSH_REMOTE_DIR/"
+    echo
+
+    # /etc/smb-credentials is root-only (0600), but smbclient runs as the
+    # current user. Make a temporary user-readable copy for this one command.
+    local TEMP_CRED=""
+    if ! TEMP_CRED="$(mktemp)"; then
+        print_warning \
+            "Could not create a temporary credentials file. \
+SSH identity restore skipped."
+        return 0
+    fi
+
+    if ! sudo cat "$SMB_CRED_FILE" > "$TEMP_CRED"; then
+        rm -f "$TEMP_CRED"
+        print_warning \
+            "Could not read SMB credentials. \
+SSH identity restore skipped."
+        return 0
+    fi
+
+    chmod 600 "$TEMP_CRED"
+
+    if ! nix-shell -p samba --run "
+        smbclient \
+            \"$SMB_BOOTSTRAP_SHARE\" \
+            -A \"$TEMP_CRED\" \
+            -c '
+                cd \"$SSH_REMOTE_DIR\";
+                get id_ed25519_cascade $TEMP_DIR/id_ed25519_cascade;
+                get id_ed25519_cascade.pub $TEMP_DIR/id_ed25519_cascade.pub;
+            '
+    "
+    then
+        rm -f "$TEMP_CRED"
+        print_warning \
+            "Could not connect to the NAS or retrieve the SSH identity.
+Installation will continue normally."
+        return 0
+    fi
+
+    rm -f "$TEMP_CRED"
+
+    # --------------------------------------------------------------------------
+    # Validate downloaded files.
+    # --------------------------------------------------------------------------
+    if [[ ! -s "$TEMP_DIR/id_ed25519_cascade" ]]; then
+        print_warning \
+            "id_ed25519_cascade was not found on the NAS.
+Installation will continue normally."
+        return 0
+    fi
+
+    if [[ ! -s "$TEMP_DIR/id_ed25519_cascade.pub" ]]; then
+        print_warning \
+            "id_ed25519_cascade.pub was not found on the NAS.
+Installation will continue normally."
+        return 0
+    fi
+
+    # --------------------------------------------------------------------------
+    # Install identity locally.
+    # --------------------------------------------------------------------------
+    if ! mkdir -p "$SSH_CONFIG_DIR"; then
+        print_warning \
+            "Could not create the local SSH configuration directory.
+Installation will continue normally."
+        return 0
+    fi
+
+    chmod 700 "$SSH_CONFIG_DIR"
+
+    if ! install \
+        -m 0600 \
+        "$TEMP_DIR/id_ed25519_cascade" \
+        "$SSH_PRIVATE_KEY"
+    then
+        print_warning \
+            "Could not install the SSH private key locally.
+Installation will continue normally."
+        return 0
+    fi
+
+    if ! install \
+        -m 0644 \
+        "$TEMP_DIR/id_ed25519_cascade.pub" \
+        "$SSH_PUBLIC_KEY"
+    then
+        print_warning \
+            "Could not install the SSH public key locally.
+Installation will continue normally."
+
+        # Remove the private key if the public key installation fails so we
+        # don't leave a partial SSH identity behind.
+        rm -f "$SSH_PRIVATE_KEY"
+
+        return 0
+    fi
+
+    # --------------------------------------------------------------------------
+    # Final validation.
+    # --------------------------------------------------------------------------
+    if [[ ! -r "$SSH_PRIVATE_KEY" || ! -r "$SSH_PUBLIC_KEY" ]]; then
+        print_warning \
+            "SSH identity validation failed.
+Installation will continue normally."
+        return 0
+    fi
+
+    # Make sure the private key is not accidentally accessible by others.
+    chmod 600 "$SSH_PRIVATE_KEY"
+    chmod 644 "$SSH_PUBLIC_KEY"
+
+    # --------------------------------------------------------------------------
+    # Optional: GitHub identity (used for `git push`). Non-fatal.
+    # Not fetched over SMB with id_ed25519_cascade; pulled over SSH from
+    # the NAS using the cascade key installed just above.
+    # --------------------------------------------------------------------------
+    if [[ ! -s "$SSH_CONFIG_DIR/id_ed25519_github" ]]; then
+        if ssh -i "$SSH_PRIVATE_KEY" -o IdentitiesOnly=yes -o BatchMode=yes \
+               -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+               root@10.10.10.10 'cat /mnt/user/toolkit/SSH/id_ed25519_github' \
+               > "$TEMP_DIR/id_ed25519_github" 2>/dev/null \
+           && [[ -s "$TEMP_DIR/id_ed25519_github" ]]; then
+            install -m 0600 "$TEMP_DIR/id_ed25519_github" "$SSH_CONFIG_DIR/id_ed25519_github"
+            ssh -i "$SSH_PRIVATE_KEY" -o IdentitiesOnly=yes -o BatchMode=yes \
+                -o ConnectTimeout=10 root@10.10.10.10 \
+                'cat /mnt/user/toolkit/SSH/id_ed25519_github.pub' \
+                > "$SSH_CONFIG_DIR/id_ed25519_github.pub" 2>/dev/null || true
+            if [[ -s "$SSH_CONFIG_DIR/id_ed25519_github.pub" ]]; then
+                chmod 644 "$SSH_CONFIG_DIR/id_ed25519_github.pub"
+            else
+                rm -f "$SSH_CONFIG_DIR/id_ed25519_github.pub"
+            fi
+            echo "  GitHub key → $SSH_CONFIG_DIR/id_ed25519_github"
+        else
+            print_warning \
+                "Could not fetch the GitHub identity from the NAS (10.10.10.10).
+git push will need manual setup. Installation continues normally."
+        fi
+    fi
+
+    # Make `git push` work immediately (the initial clone is HTTPS; push needs SSH). The remote is
+    # derived from whatever was cloned, never hardcoded, so the repository can be renamed or moved.
+    if [[ -d "$CONFIG_DIR/.git" ]]; then
+        local origin_url
+        origin_url=$(git -C "$CONFIG_DIR" remote get-url origin 2>/dev/null || true)
+        if [[ "$origin_url" == https://github.com/* ]]; then
+            git -C "$CONFIG_DIR" remote set-url origin \
+                "git@github.com:${origin_url#https://github.com/}" 2>/dev/null || true
+        fi
+    fi
+
+    echo
+    echo "✓ SSH identity restored successfully."
+    echo
+    echo "  Private key → $SSH_PRIVATE_KEY"
+    echo "  Public key  → $SSH_PUBLIC_KEY"
+    echo
+}
+
+# ------------------------------------------------------------------------------
+# Syncthing Identity Bootstrap
+# ------------------------------------------------------------------------------
+#
+# IMPORTANT:
+# This function is intentionally NON-FATAL.
+# Failure to restore Syncthing identity must NEVER stop the full NixOS install.
+# The function returns success even when bootstrap fails.
+# ------------------------------------------------------------------------------
+bootstrap_syncthing_identity() {
+    print_header "Syncthing Identity Bootstrap"
+
+    # --------------------------------------------------------------------------
+    # Existing identity
+    # --------------------------------------------------------------------------
+    if [[ -f "$SYNCTHING_CERT" && -f "$SYNCTHING_KEY" ]]; then
+        echo "✓ Existing Syncthing identity found."
+        echo "  Skipping NAS restore."
+        return 0
+    fi
+
+    # --------------------------------------------------------------------------
+    # SMB credentials
+    # --------------------------------------------------------------------------
+    if [[ ! -f "$SMB_CRED_FILE" ]]; then
+        print_warning \
+            "SMB credentials are unavailable. \
+Syncthing identity will not be restored from NAS."
+        return 0
+    fi
+
+    # --------------------------------------------------------------------------
+    # Temporary directory
+    # --------------------------------------------------------------------------
+    local TEMP_DIR
+    if ! TEMP_DIR="$(mktemp -d)"; then
+        print_warning \
+            "Could not create a temporary directory. \
+Syncthing identity restore skipped."
+        return 0
+    fi
+    cleanup_syncthing_bootstrap() {
+        rm -rf "$TEMP_DIR"
+    }
+    trap cleanup_syncthing_bootstrap RETURN
+
+    # --------------------------------------------------------------------------
+    # Retrieve files from NAS.
+    #
+    # nix-shell is completely internal to this function.
+    # The user does NOT need to run nix-shell manually.
+    # --------------------------------------------------------------------------
+    echo "Attempting to restore Syncthing identity from NAS..."
+    echo
+    echo "  Share: $SMB_BOOTSTRAP_SHARE"
+    echo "  Path : $SYNCTHING_REMOTE_DIR/"
+    echo
+
+    # /etc/smb-credentials is root-only (0600), but smbclient runs as the
+    # current user. Make a temporary user-readable copy for this one command.
+    local TEMP_CRED=""
+    if ! TEMP_CRED="$(mktemp)"; then
+        print_warning \
+            "Could not create a temporary credentials file. \
+Syncthing identity restore skipped."
+        return 0
+    fi
+    if ! sudo cat "$SMB_CRED_FILE" > "$TEMP_CRED"; then
+        rm -f "$TEMP_CRED"
+        print_warning \
+            "Could not read SMB credentials. \
+Syncthing identity restore skipped."
+        return 0
+    fi
+    chmod 600 "$TEMP_CRED"
+
+    if ! nix-shell -p samba --run "
+        smbclient \
+            \"$SMB_BOOTSTRAP_SHARE\" \
+            -A \"$TEMP_CRED\" \
+            -c '
+                cd \"$SYNCTHING_REMOTE_DIR\";
+                get cert.pem $TEMP_DIR/cert.pem;
+                get key.pem $TEMP_DIR/key.pem;
+            '
+    "
+    then
+        rm -f "$TEMP_CRED"
+        print_warning \
+            "Could not connect to the NAS or retrieve the Syncthing identity.
+Installation will continue normally."
+        return 0
+    fi
+    rm -f "$TEMP_CRED"
+
+    # --------------------------------------------------------------------------
+    # Validate downloaded files.
+    # --------------------------------------------------------------------------
+    if [[ ! -s "$TEMP_DIR/cert.pem" ]]; then
+        print_warning \
+            "cert.pem was not found on the NAS.
+Installation will continue normally."
+        return 0
+    fi
+    if [[ ! -s "$TEMP_DIR/key.pem" ]]; then
+        print_warning \
+            "key.pem was not found on the NAS.
+Installation will continue normally."
+        return 0
+    fi
+
+    # --------------------------------------------------------------------------
+    # Install identity locally.
+    # --------------------------------------------------------------------------
+    if ! mkdir -p "$SYNCTHING_CONFIG_DIR"; then
+        print_warning \
+            "Could not create the local Syncthing configuration directory.
+Installation will continue normally."
+        return 0
+    fi
+    if ! install \
+        -m 0644 \
+        "$TEMP_DIR/cert.pem" \
+        "$SYNCTHING_CERT"
+    then
+        print_warning \
+            "Could not install cert.pem locally.
+Installation will continue normally."
+        return 0
+    fi
+    if ! install \
+        -m 0600 \
+        "$TEMP_DIR/key.pem" \
+        "$SYNCTHING_KEY"
+    then
+        print_warning \
+            "Could not install key.pem locally.
+Installation will continue normally."
+        # Remove cert if key installation failed so we don't leave a partial
+        # identity behind.
+        rm -f "$SYNCTHING_CERT"
+        return 0
+    fi
+
+    # Match the systemd service identity (User=oscarfaldi, Group=syncthing).
+    if ! sudo chown \
+        "$(id -u):$(id -g)" \
+        "$SYNCTHING_CERT" \
+        "$SYNCTHING_KEY"
+    then
+        print_warning \
+            "Could not set Syncthing identity ownership.
+Installation will continue normally."
+        return 0
+    fi
+
+    # --------------------------------------------------------------------------
+    # Final validation.
+    # --------------------------------------------------------------------------
+    if [[ ! -r "$SYNCTHING_CERT" || ! -r "$SYNCTHING_KEY" ]]; then
+        print_warning \
+            "Syncthing identity validation failed.
+Installation will continue normally."
+        return 0
+    fi
+
+    echo
+    echo "✓ Syncthing identity restored successfully."
+    echo
+    echo "  cert.pem → $SYNCTHING_CERT"
+    echo "  key.pem  → $SYNCTHING_KEY"
+    echo
+}
+
+# ------------------------------------------------------------------------------
+# NixOS Bootstrap
+# ------------------------------------------------------------------------------
+
+bootstrap_system() {
+    print_header "Rebuilding Rainier System"
+
+    echo "Building Rainier and setting it as the default for next boot..."
+    echo "Using ncps cache for this build."
+    echo
+
+    sudo env NIX_CONFIG="$NIX_CONFIG" nixos-rebuild boot \
+        --flake "$CONFIG_DIR#rainier" \
+        --option substituters "$NIX_CACHE_SUBSTITUTERS" \
+        --option trusted-public-keys "$NIX_CACHE_TRUSTED_KEYS" \
+        --option trusted-substituters "http://10.10.10.132:8501" \
+        --option narinfo-cache-negative-ttl 0 \
+        --option connect-timeout 5
+
+    echo
+    echo "✓ Rainier system generation built successfully."
+    echo "✓ New generation set as default for next boot."
+    echo
+    echo "Cleaning /etc/nixos ..."
+
+    sudo find /etc/nixos -mindepth 1 -delete
+
+    echo "✓ /etc/nixos cleaned."
+    echo
+    echo "✓ System rebuilt successfully."
+}
+
+# ------------------------------------------------------------------------------
+# Main
+# ------------------------------------------------------------------------------
+
+main() {
+    print_header "Rainier Initialization"
+
+    if [[ "$(id -u)" -eq 0 ]]; then
+        echo "This script must be run as a normal user, not root." >&2
+        exit 1
+    fi
+
+    echo "Fresh NixOS bootstrap starting..."
+    echo
+    echo "The installation will continue even if SSH or Syncthing identity"
+    echo "cannot be restored from the NAS."
+    echo
+
+    # --------------------------------------------------------------------------
+    # Authenticate once and keep sudo alive.
+    # --------------------------------------------------------------------------
+
+    sudo -v
+
+    while true; do
+        sudo -n true
+        sleep 60
+        kill -0 "$$" || exit
+    done 2>/dev/null &
+
+    # --------------------------------------------------------------------------
+    # Bootstrap sequence.
+    # --------------------------------------------------------------------------
+
+    import_hardware_config
+    fix_ownership
+    prepare_hardware_for_flake
+    setup_smb_credentials
+    bootstrap_ssh_identity
+    bootstrap_syncthing_identity
+    report_pinned_revision
+    bootstrap_system
+
+    # --------------------------------------------------------------------------
+    # Final reboot.
+    # --------------------------------------------------------------------------
+
+    print_header "Installation Complete"
+
+    echo "Rainier has been rebuilt successfully."
+    echo
+    echo "Rebooting in 5 seconds..."
+    echo
+
+    sleep 5
+
+    sudo reboot
+}
+
+main "$@"
