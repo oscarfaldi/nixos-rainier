@@ -993,6 +993,10 @@ def main() -> int:
     media_path = validate_input(sys.argv)
 
     if media_path is None:
+        # The window is already open by the time this runs, so leaving without a terminal state
+        # would leave it polling "waiting for the first status" forever, with a cancel button that
+        # has nothing to cancel.
+        job_write(state="failed", message="invalid input")
         return 1
 
     return run_transcription(

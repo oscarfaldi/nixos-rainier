@@ -57,6 +57,45 @@ is_video_file() {
 }
 
 # ============================================================
+# Quickshell job reporting
+#
+# qs-job starts this script with QS_JOB_STATUS pointing at a key=value file that the shell's job
+# window polls to draw the progress bar. The file is replaced atomically, so a reader never sees
+# half a line. Without QS_JOB_STATUS (a plain terminal run) every call here is a no-op and the
+# script behaves exactly as before.
+# ============================================================
+
+JOB_TITLE="Re-encode to HEVC MP4"
+JOB_STATE="running"
+JOB_FILE=""
+JOB_DETAIL=""
+JOB_INDEX="0"
+JOB_TOTAL="1"
+JOB_PERCENT="0.0"
+JOB_SPEED="0.00"
+JOB_ETA="00:00:00"
+JOB_MESSAGE=""
+
+job_write() {
+    [[ -n "${QS_JOB_STATUS:-}" ]] || return 0
+
+    {
+        printf 'title=%s\n' "$JOB_TITLE"
+        printf 'state=%s\n' "$JOB_STATE"
+        printf 'file=%s\n' "$JOB_FILE"
+        printf 'detail=%s\n' "$JOB_DETAIL"
+        printf 'percent=%s\n' "$JOB_PERCENT"
+        printf 'speed=%s\n' "$JOB_SPEED"
+        printf 'eta=%s\n' "$JOB_ETA"
+        printf 'index=%s\n' "$JOB_INDEX"
+        printf 'total=%s\n' "$JOB_TOTAL"
+        printf 'message=%s\n' "$JOB_MESSAGE"
+    } >"$QS_JOB_STATUS.tmp" 2>/dev/null && mv -f "$QS_JOB_STATUS.tmp" "$QS_JOB_STATUS" 2>/dev/null || true
+
+    return 0
+}
+
+# ============================================================
 # Collect Files
 # ============================================================
 
@@ -110,6 +149,13 @@ done
 total=${#files[@]}
 
 if [[ "$total" -eq 0 ]]; then
+    JOB_TOTAL="0"
+    JOB_INDEX="0"
+    JOB_STATE="done"
+    JOB_PERCENT="100.0"
+    JOB_MESSAGE="no supported videos found"
+    job_write
+
     notify \
         "Re-encode and Compress to HEVC MP4" \
         "No supported videos found."
@@ -139,44 +185,6 @@ session_start=$(date +%s)
 tmp=""
 ffmpeg_log=""
 
-# ============================================================
-# Quickshell job reporting
-#
-# qs-job starts this script with QS_JOB_STATUS pointing at a key=value file that the shell's job
-# window polls to draw the progress bar. The file is replaced atomically, so a reader never sees
-# half a line. Without QS_JOB_STATUS (a plain terminal run) every call here is a no-op and the
-# script behaves exactly as before.
-# ============================================================
-
-JOB_TITLE="Re-encode to HEVC MP4"
-JOB_STATE="running"
-JOB_FILE=""
-JOB_DETAIL=""
-JOB_INDEX="0"
-JOB_TOTAL="1"
-JOB_PERCENT="0.0"
-JOB_SPEED="0.00"
-JOB_ETA="00:00:00"
-JOB_MESSAGE=""
-
-job_write() {
-    [[ -n "${QS_JOB_STATUS:-}" ]] || return 0
-
-    {
-        printf 'title=%s\n' "$JOB_TITLE"
-        printf 'state=%s\n' "$JOB_STATE"
-        printf 'file=%s\n' "$JOB_FILE"
-        printf 'detail=%s\n' "$JOB_DETAIL"
-        printf 'percent=%s\n' "$JOB_PERCENT"
-        printf 'speed=%s\n' "$JOB_SPEED"
-        printf 'eta=%s\n' "$JOB_ETA"
-        printf 'index=%s\n' "$JOB_INDEX"
-        printf 'total=%s\n' "$JOB_TOTAL"
-        printf 'message=%s\n' "$JOB_MESSAGE"
-    } >"$QS_JOB_STATUS.tmp" 2>/dev/null && mv -f "$QS_JOB_STATUS.tmp" "$QS_JOB_STATUS" 2>/dev/null || true
-
-    return 0
-}
 
 cleanup() {
     echo
@@ -234,6 +242,40 @@ for input in "${files[@]}"; do
     tmp="${output}.nvenc-tmp.mp4"
     ffmpeg_log="${tmp}.log"
 
+    # MP4 can only store text subtitles, as mov_text: those are converted so nothing is lost. A bitmap
+    # subtitle (PGS/VobSub) has no MP4 form at all, so it is reported in the log instead of silently
+    # disappearing - the source file still carries it.
+    sub_args=()
+    sub_codecs=()
+    sub_dropped=()
+    sub_out=0
+
+    while IFS= read -r sub_codec; do
+        [[ -n "$sub_codec" ]] && sub_codecs+=("$sub_codec")
+    done < <(ffprobe \
+        -v error \
+        -select_streams s \
+        -show_entries stream=codec_name \
+        -of default=noprint_wrappers=1:nokey=1 \
+        "$input" 2>/dev/null)
+
+    for sub_index in "${!sub_codecs[@]}"; do
+        case "${sub_codecs[$sub_index]}" in
+            subrip|ass|ssa|mov_text|webvtt|text)
+                sub_args+=(-map "0:s:$sub_index" -c:s:"$sub_out" mov_text)
+                sub_out=$((sub_out + 1))
+                ;;
+            *)
+                sub_dropped+=("${sub_codecs[$sub_index]}")
+                ;;
+        esac
+    done
+
+    if [[ "${#sub_dropped[@]}" -gt 0 ]]; then
+        echo "[SUBTITLE] dropped ${sub_dropped[*]} - MP4 cannot store bitmap subtitles"
+    fi
+
+
     rm -f "$tmp" "$ffmpeg_log"
 
     echo
@@ -283,7 +325,7 @@ for input in "${files[@]}"; do
         -i "$input" \
         -map 0:v:0 \
         -map "0:a?" \
-        -sn \
+        "${sub_args[@]}" \
         -dn \
         -c:v hevc_nvenc \
         -gpu 0 \
@@ -369,6 +411,8 @@ for input in "${files[@]}"; do
     done
 
     ffmpeg_exit_code=${PIPESTATUS[0]}
+
+    set -e
 
     echo
 

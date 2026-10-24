@@ -47,7 +47,7 @@ FloatingWindow {
     property string message: ""
     property string logText: ""
 
-    readonly property bool finished: root.jobState === "done" || root.jobState === "failed" || root.jobState === "cancelled"
+    readonly property bool finished: root.jobState === "cancelled" || (root.jobState === "done" && (root.fileTotal <= 0 || root.fileIndex >= root.fileTotal)) || (root.jobState === "failed" && root.fileTotal > 0 && root.fileIndex >= root.fileTotal)
     readonly property bool showUnits: root.fileTotal > 1
     readonly property real doneUnits: root.finished ? root.fileTotal : Math.max(0, root.fileIndex - 1)
     readonly property real unitPercent: root.fileTotal > 0 ? Math.max(0, Math.min(100, root.doneUnits / root.fileTotal * 100)) : 0
@@ -106,6 +106,15 @@ FloatingWindow {
             statusProc.running = true;
             logProc.running = true;
         }
+    }
+
+    // The summary is the reason the log gets read at all: the totals and the space saved. The poll
+    // timer stops on the same tick that flips `finished`, so the last read can land a hair before
+    // the summary lines are written and leave them below the visible area with nothing left to
+    // scroll them in. A finished job therefore takes one more read.
+    onFinishedChanged: {
+        if (root.finished)
+            logProc.running = true;
     }
 
     Process {
@@ -402,14 +411,14 @@ FloatingWindow {
                         cursorVisible: false
                     }
 
-                    onContentHeightChanged: if (follow) contentY = Math.max(0, contentHeight - height)
+                    onContentHeightChanged: if (follow || root.finished) contentY = Math.max(0, contentHeight - height)
                     Component.onCompleted: contentY = Math.max(0, contentHeight - height)
 
                     Connections {
                         target: root
 
                         function onLogTextChanged() {
-                            if (logScroll.follow)
+                            if (logScroll.follow || root.finished)
                                 logScroll.contentY = Math.max(0, logScroll.contentHeight - logScroll.height);
                         }
                     }
