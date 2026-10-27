@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Yazi
+Comment=Terminal File Manager
+Exec=yazi-launch
+Icon=/home/oscarfaldi/System/assets/icons/desktop/yazi.png
+Terminal=false
+Categories=System;FileManager;

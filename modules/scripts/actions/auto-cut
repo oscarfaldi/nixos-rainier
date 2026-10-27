@@ -1,0 +1,530 @@
+#!/usr/bin/env bash
+
+# ============================================================
+# Auto-Editor Rough Cut
+#
+# Keeps Auto-Editor's native terminal progress bar intact while
+# adding elapsed time, processing speed, and an approximate ETA
+# to the Ghostty window title.
+#
+# The native progress bar is preserved by running Auto-Editor
+# inside a pseudo-terminal via util-linux `script`.
+# ============================================================
+
+set -u
+
+# ------------------------------------------------------------
+# Settings
+# ------------------------------------------------------------
+
+AUDIO_THRESHOLD="15%"
+
+# Slightly tighter than the previous 0.10s / 0.18s settings.
+MARGIN_BEFORE="0.10s"
+MARGIN_AFTER="0.16s"
+
+# Keep the smoothing that already feels good.
+SMOOTH_MINCUT="0.15s"
+SMOOTH_MINCLIP="0.10s"
+
+OUTPUT_SUFFIX="_autoedit"
+
+# How often the wrapper refreshes the ETA/title.
+PROGRESS_INTERVAL="0.50"
+
+# ------------------------------------------------------------
+# Notifications
+# ------------------------------------------------------------
+
+notify() {
+    if command -v notify-send >/dev/null 2>&1; then
+        notify-send "$1" "$2"
+    fi
+}
+
+# ------------------------------------------------------------
+# UI Helpers
+# ------------------------------------------------------------
+
+print_separator() {
+    printf '%s\n' '================================================================'
+}
+
+format_duration() {
+    local total="$1"
+    local hours
+    local minutes
+    local seconds
+
+    if [[ ! "$total" =~ ^[0-9]+$ ]]; then
+        printf '%s' "--:--:--"
+        return
+    fi
+
+    hours=$((total / 3600))
+    minutes=$(((total % 3600) / 60))
+    seconds=$((total % 60))
+
+    printf '%02d:%02d:%02d' "$hours" "$minutes" "$seconds"
+}
+
+wait_before_close() {
+    printf '\n\n'
+    read -r -p "Press Enter to close..."
+}
+
+set_terminal_title() {
+    local title="$1"
+
+    # OSC 2 changes the terminal window/tab title without touching
+    # Auto-Editor's own progress line.
+    printf '\033]2;%s\007' "$title"
+}
+
+reset_terminal_title() {
+    set_terminal_title "Auto-Cut"
+}
+
+# ------------------------------------------------------------
+# Error Handling
+# ------------------------------------------------------------
+
+die() {
+    local message="$1"
+
+    printf '\n'
+    print_separator
+    printf '%s\n' ' FAILED'
+    print_separator
+    printf '\n'
+    printf 'Error: %s\n' "$message"
+    printf '\n'
+
+    notify "Auto-Cut Failed" "$message"
+    reset_terminal_title
+    wait_before_close
+
+    exit 1
+}
+
+# ------------------------------------------------------------
+# Output Path
+# ------------------------------------------------------------
+
+unique_output_path() {
+    local directory="$1"
+    local stem="$2"
+    local candidate
+    local counter
+
+    candidate="${directory}/${stem}.kdenlive"
+    counter=2
+
+    while [[ -e "$candidate" ]]; do
+        candidate="${directory}/${stem}-${counter}.kdenlive"
+        counter=$((counter + 1))
+    done
+
+    printf '%s\n' "$candidate"
+}
+
+# ------------------------------------------------------------
+# Media Duration
+# ------------------------------------------------------------
+
+get_media_duration() {
+    local input="$1"
+    local duration
+
+    if ! command -v ffprobe >/dev/null 2>&1; then
+        printf '%s\n' "0"
+        return 0
+    fi
+
+    duration="$(
+        ffprobe \
+            -v error \
+            -show_entries format=duration \
+            -of default=noprint_wrappers=1:nokey=1 \
+            "$input" 2>/dev/null
+    )"
+
+    if [[ "$duration" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+        awk -v value="$duration" 'BEGIN { printf "%d\n", value + 0.5 }'
+    else
+        printf '%s\n' "0"
+    fi
+}
+
+# ------------------------------------------------------------
+# Native Progress Parsing
+# ------------------------------------------------------------
+
+get_latest_progress() {
+    local logfile="$1"
+    local progress
+
+    [[ -s "$logfile" ]] || return 0
+
+    # Auto-Editor's human progress bar is logged with carriage
+    # returns. Normalize those to newlines and take the newest
+    # percentage token.
+    progress="$(
+        tr '\r' '\n' < "$logfile" 2>/dev/null |
+            grep -oE '[0-9]+([.][0-9]+)?%' |
+            tail -n 1 |
+            tr -d '%' || true
+    )"
+
+    if [[ "$progress" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+        printf '%s\n' "$progress"
+    fi
+}
+
+# ------------------------------------------------------------
+# ETA / Title Monitor
+# ------------------------------------------------------------
+
+monitor_progress() {
+    local logfile="$1"
+    local duration="$2"
+    local process_pid="$3"
+    local start_time="$4"
+
+    local percent
+    local elapsed
+    local processed_seconds
+    local speed
+    local eta_seconds
+    local eta
+
+    while kill -0 "$process_pid" 2>/dev/null; do
+        percent="$(get_latest_progress "$logfile")"
+        elapsed=$((SECONDS - start_time))
+
+        if [[ "$percent" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+
+            if [[ "$duration" -gt 0 && "$percent" != "0" ]]; then
+                processed_seconds="$(
+                    awk \
+                        -v p="$percent" \
+                        -v d="$duration" \
+                        'BEGIN { printf "%d\n", (p / 100.0) * d + 0.5 }'
+                )"
+
+                if (( elapsed > 0 && processed_seconds > 0 )); then
+                    speed="$(
+                        awk \
+                            -v p="$processed_seconds" \
+                            -v e="$elapsed" \
+                            'BEGIN { printf "%.2fx", p / e }'
+                    )"
+
+                    eta_seconds="$(
+                        awk \
+                            -v p="$processed_seconds" \
+                            -v d="$duration" \
+                            -v e="$elapsed" \
+                            'BEGIN {
+                                speed = p / e
+                                remaining = d - p
+                                if (remaining < 0) remaining = 0
+                                printf "%d\n", remaining / speed + 0.5
+                            }'
+                    )"
+
+                    eta="$(format_duration "$eta_seconds")"
+
+                    set_terminal_title \
+                        "Auto-Cut | ${percent}% | ETA ${eta} | Speed ${speed}"
+                else
+                    set_terminal_title \
+                        "Auto-Cut | ${percent}% | Elapsed $(format_duration "$elapsed")"
+                fi
+            else
+                set_terminal_title \
+                    "Auto-Cut | ${percent}% | Elapsed $(format_duration "$elapsed")"
+            fi
+
+        else
+            set_terminal_title \
+                "Auto-Cut | Starting | Elapsed $(format_duration "$elapsed")"
+        fi
+
+        sleep "$PROGRESS_INTERVAL"
+    done
+}
+
+# ------------------------------------------------------------
+# Run Auto-Editor Without Replacing Its Progress Bar
+# ------------------------------------------------------------
+
+run_auto_editor() {
+    local input="$1"
+    local output="$2"
+    local logfile="$3"
+    local duration="$4"
+
+    local command
+    local process_pid
+    local monitor_pid
+    local start_time
+    local rc
+    local elapsed
+    local final_percent
+    local processed_seconds
+    local speed
+    local eta_seconds
+    local eta
+
+    # Build one safely quoted command string for `script -c`.
+    # The pseudo-terminal is the important part: Auto-Editor sees
+    # a real TTY and therefore keeps its native progress display.
+    printf -v command '%q ' \
+        auto-editor \
+        "$input" \
+        --edit "audio:threshold=${AUDIO_THRESHOLD}" \
+        --margin "${MARGIN_BEFORE},${MARGIN_AFTER}" \
+        --smooth "${SMOOTH_MINCUT},${SMOOTH_MINCLIP}" \
+        --progress modern \
+        --export kdenlive \
+        -o "$output"
+
+    : > "$logfile"
+
+    start_time="$SECONDS"
+
+    script -qefc "$command" "$logfile" &
+    process_pid=$!
+
+    monitor_progress \
+        "$logfile" \
+        "$duration" \
+        "$process_pid" \
+        "$start_time" &
+    monitor_pid=$!
+
+    wait "$process_pid"
+    rc=$?
+
+    # Stop the title monitor after the real Auto-Editor process ends.
+    kill "$monitor_pid" 2>/dev/null || true
+    wait "$monitor_pid" 2>/dev/null || true
+
+    elapsed=$((SECONDS - start_time))
+    final_percent="$(get_latest_progress "$logfile")"
+
+    if [[ "$rc" -eq 0 ]]; then
+
+        if [[ "$duration" -gt 0 ]]; then
+            processed_seconds="$duration"
+
+            if (( elapsed > 0 )); then
+                speed="$(
+                    awk \
+                        -v p="$processed_seconds" \
+                        -v e="$elapsed" \
+                        'BEGIN { printf "%.2fx", p / e }'
+                )"
+
+                set_terminal_title \
+                    "Auto-Cut | 100% | Done in $(format_duration "$elapsed") | Speed ${speed}"
+            else
+                set_terminal_title "Auto-Cut | 100% | Complete"
+            fi
+        elif [[ -n "$final_percent" ]]; then
+            set_terminal_title \
+                "Auto-Cut | ${final_percent}% | Done in $(format_duration "$elapsed")"
+        else
+            set_terminal_title "Auto-Cut | Complete"
+        fi
+
+    else
+        reset_terminal_title
+    fi
+
+    printf '\n'
+
+    return "$rc"
+}
+
+# ------------------------------------------------------------
+# Dependency Checks
+# ------------------------------------------------------------
+
+command -v auto-editor >/dev/null 2>&1 \
+    || die "auto-editor was not found in PATH."
+
+command -v realpath >/dev/null 2>&1 \
+    || die "realpath was not found in PATH."
+
+command -v awk >/dev/null 2>&1 \
+    || die "awk was not found in PATH."
+
+command -v grep >/dev/null 2>&1 \
+    || die "grep was not found in PATH."
+
+command -v script >/dev/null 2>&1 \
+    || die "script was not found in PATH. Install util-linux."
+
+# ------------------------------------------------------------
+# Input Validation
+# ------------------------------------------------------------
+
+if [[ "$#" -eq 0 ]]; then
+    die "No video files were selected."
+fi
+
+# ------------------------------------------------------------
+# Start Notification
+# ------------------------------------------------------------
+
+if [[ "$#" -eq 1 ]]; then
+    notify "Starting Auto-Cut" "Processing selected video..."
+else
+    notify "Starting Auto-Cut" "Processing $# selected videos..."
+fi
+
+# ------------------------------------------------------------
+# Main Processing
+# ------------------------------------------------------------
+
+success_count=0
+failure_count=0
+current_file=0
+total_files="$#"
+overall_start="$SECONDS"
+
+for input in "$@"; do
+
+    current_file=$((current_file + 1))
+
+    if [[ ! -f "$input" ]]; then
+        failure_count=$((failure_count + 1))
+
+        printf '\n'
+        print_separator
+        printf '%s\n' ' SKIPPED'
+        print_separator
+        printf '\n'
+        printf 'File not found: %s\n' "$input"
+        printf '\n'
+        continue
+    fi
+
+    input="$(realpath "$input")"
+
+    directory="$(dirname "$input")"
+    filename="$(basename "$input")"
+    stem="${filename%.*}"
+
+    output_stem="${stem}${OUTPUT_SUFFIX}"
+    output="$(unique_output_path "$directory" "$output_stem")"
+
+    logfile="$(mktemp "${TMPDIR:-/tmp}/auto-cut.XXXXXX")"
+    duration="$(get_media_duration "$input")"
+
+    printf '\n'
+    print_separator
+    printf '%s\n' ' AUTO-CUT VIDEO'
+    print_separator
+    printf '\n'
+    printf 'File      : %d/%d\n' "$current_file" "$total_files"
+    printf 'Input     : %s\n' "$filename"
+    printf 'Output    : %s\n' "$(basename "$output")"
+    printf 'Duration  : %s\n' "$(format_duration "$duration")"
+    printf 'Threshold : %s\n' "$AUDIO_THRESHOLD"
+    printf 'Margin    : %s before / %s after\n' \
+        "$MARGIN_BEFORE" \
+        "$MARGIN_AFTER"
+    printf 'Smooth    : %s min cut / %s min clip\n' \
+        "$SMOOTH_MINCUT" \
+        "$SMOOTH_MINCLIP"
+    printf 'Frame rate: source/native\n'
+    printf 'Progress  : Auto-Editor native bar\n'
+    printf 'ETA       : Ghostty title\n'
+
+    printf '\n'
+    print_separator
+    printf '\n'
+    printf 'Starting Auto-Editor...\n'
+    printf '\n'
+
+    if run_auto_editor "$input" "$output" "$logfile" "$duration"; then
+        success_count=$((success_count + 1))
+
+        printf '\n'
+        print_separator
+        printf '%s\n' ' COMPLETE'
+        print_separator
+        printf '\n'
+        printf 'Input  : %s\n' "$filename"
+        printf 'Output : %s\n' "$(basename "$output")"
+        printf '\n'
+
+    else
+        failure_count=$((failure_count + 1))
+        rm -f -- "$output"
+
+        printf '\n'
+        print_separator
+        printf '%s\n' ' FAILED'
+        print_separator
+        printf '\n'
+        printf 'Auto-Editor failed for:\n'
+        printf '%s\n' "$filename"
+        printf '\n'
+        printf 'Last output:\n'
+        printf '%s\n' '----------------------------------------------------------------'
+
+        if [[ -s "$logfile" ]]; then
+            tr '\r' '\n' < "$logfile" | tail -n 20
+        else
+            printf '%s\n' 'No output was captured.'
+        fi
+
+        printf '%s\n' '----------------------------------------------------------------'
+        printf '\n'
+    fi
+
+    rm -f -- "$logfile"
+    reset_terminal_title
+
+done
+
+# ------------------------------------------------------------
+# Final Status
+# ------------------------------------------------------------
+
+overall_elapsed=$((SECONDS - overall_start))
+
+printf '\n'
+print_separator
+
+if [[ "$failure_count" -eq 0 ]]; then
+    printf '%s\n' ' ALL AUTO-CUT JOBS COMPLETE'
+else
+    printf '%s\n' ' AUTO-CUT FINISHED WITH ERRORS'
+fi
+
+print_separator
+printf '\n'
+printf 'Successful: %d\n' "$success_count"
+printf 'Failed    : %d\n' "$failure_count"
+printf 'Total time: %s\n' "$(format_duration "$overall_elapsed")"
+printf '\n'
+
+if [[ "$failure_count" -eq 0 ]]; then
+    notify \
+        "Auto-Cut Complete" \
+        "${success_count} video(s) processed successfully."
+else
+    notify \
+        "Auto-Cut Finished with Errors" \
+        "${success_count} succeeded, ${failure_count} failed."
+fi
+
+wait_before_close
+reset_terminal_title
+
+exit 0

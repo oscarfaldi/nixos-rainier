@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+
+# ==============================================================================
+# Script Name: Rename TS to MTS
+# Description: Renames MPEG Transport Stream files from .ts to .mts
+#              to improve MIME detection, thumbnails, and file associations.
+# ==============================================================================
+
+set -euo pipefail
+
+# 0. Safety Check: Ensure at least one file was selected
+if [ $# -eq 0 ]; then
+    notify-send -i dialog-error "Batch Rename" "No .ts files selected."
+    exit 1
+fi
+
+COUNT=0
+
+# 1. Loop through all selected files
+for INPUT in "$@"; do
+    OUTPUT="${INPUT%.ts}.mts"
+
+    # Skip if the file doesn't actually exist
+    if [[ ! -f "$INPUT" ]]; then
+        continue
+    fi
+
+    # Skip if the file extension is already .mts
+    if [[ "$INPUT" == "$OUTPUT" ]]; then
+        continue
+    fi
+
+    # Skip if the target .mts filename already exists to prevent overwriting
+    if [[ -e "$OUTPUT" ]]; then
+        continue
+    fi
+
+    # Execute rename safely
+    mv -- "$INPUT" "$OUTPUT"
+    ((COUNT+=1))
+done
+
+# 2. Trigger system notification with the final result
+notify-send -i edit-find-replace "TS → MTS Complete" "$COUNT file(s) renamed successfully."

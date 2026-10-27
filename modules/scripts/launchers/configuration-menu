@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+
+ghostty -e nano ~/System/configuration.nix

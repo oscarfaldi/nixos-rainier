@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+
+# ==============================================================================
+# Script Name: PNG Image Converter
+# Description: Converts selected images to PNG format via Thunar Custom Actions
+# ==============================================================================
+
+set -euo pipefail
+
+# 0. Safety Check: Ensure at least one file was selected
+if [[ $# -eq 0 ]]; then
+    notify-send -i dialog-error "PNG Conversion" "No file selected."
+    exit 1
+fi
+
+SUCCESS=0
+FAILED=0
+
+# 1. Convert every selected image
+for FILE in "$@"; do
+    DIR="$(dirname "$FILE")"
+    NAME="$(basename "$FILE")"
+    OUTPUT="${DIR}/${NAME%.*}.png"
+
+    if magick \
+        "$FILE" \
+        "$OUTPUT"
+    then
+        ((++SUCCESS))
+    else
+        ((++FAILED))
+    fi
+done
+
+# 2. Trigger system notification
+if (( FAILED == 0 )); then
+    notify-send \
+        -i image-x-generic \
+        "PNG Conversion" \
+        "$SUCCESS image(s) converted successfully."
+else
+    notify-send \
+        -i dialog-warning \
+        "PNG Conversion" \
+        "$SUCCESS succeeded, $FAILED failed."
+fi

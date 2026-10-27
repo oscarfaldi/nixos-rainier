@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+DEST="/mnt/nas/valhalla/Video/Staging"
+
+if [ ! -d "$DEST" ]; then
+    notify-send \
+        -i dialog-error \
+        "NAS Video Staging" \
+        "Destination folder not available."
+    exit 1
+fi
+
+COUNT=0
+
+for FILE in "$@"; do
+
+    BASENAME="$(basename "$FILE")"
+
+    NAME="${BASENAME%.*}"
+    EXT="${BASENAME##*.}"
+
+    TARGET="${DEST}/${BASENAME}"
+
+    if [ -e "$TARGET" ]; then
+        TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
+        TARGET="${DEST}/${NAME}_${TIMESTAMP}.${EXT}"
+
+        # Keep renaming until a unique filename is found.
+        COUNTER=1
+        while [ -e "$TARGET" ]; do
+            TARGET="${DEST}/${NAME}_${TIMESTAMP}_${COUNTER}.${EXT}"
+            COUNTER=$((COUNTER + 1))
+        done
+    fi
+
+    mv -- "$FILE" "$TARGET"
+
+    COUNT=$((COUNT + 1))
+
+done
+
+notify-send \
+    -i folder-remote \
+    "NAS Video Staging" \
+    "${COUNT} file(s) moved successfully."

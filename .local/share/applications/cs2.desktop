@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Counter-Strike 2
+Comment=Launch Counter-Strike 2
+Exec=cs2
+Icon=/home/oscarfaldi/System/assets/icons/desktop/cs2.svg
+Terminal=false
+Categories=Game;

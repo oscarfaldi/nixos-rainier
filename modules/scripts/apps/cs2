@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ==============================================================================
+# CONFIG
+# ==============================================================================
+
+CS2_SH="$HOME/Games/steamapps/common/Counter-Strike Global Offensive/game/cs2.sh"
+
+NVIBRANT_ON=(0 0 0 450 0 450)
+NVIBRANT_OFF=(0 0 0 0 0 0)
+
+# ==============================================================================
+# HELPERS
+# ==============================================================================
+
+log() {
+    echo "[CS2-Manager] $*"
+}
+
+cleanup() {
+    log "Restoring normal colors..."
+    if command -v nvibrant >/dev/null 2>&1; then
+        nvibrant "${NVIBRANT_OFF[@]}" >/dev/null
+    fi
+}
+
+patch_wayland() {
+    if [[ ! -f "$CS2_SH" ]]; then
+        log "cs2.sh not found, skipping patch."
+        return
+    fi
+
+    if grep -q "SDL_VIDEO_DRIVER=x11" "$CS2_SH"; then
+        log "Patching SDL backend: x11 -> wayland"
+        sed -i 's/SDL_VIDEO_DRIVER=x11/SDL_VIDEO_DRIVER=wayland/g' \
+            "$CS2_SH"
+    elif grep -q "SDL_VIDEO_DRIVER=wayland" "$CS2_SH"; then
+        log "SDL backend already set to Wayland."
+    else
+        log "SDL_VIDEO_DRIVER line not found."
+    fi
+}
+
+enable_vibrance() {
+    if ! command -v nvibrant >/dev/null 2>&1; then
+        log "nvibrant not installed."
+        return
+    fi
+
+    log "Enabling digital vibrance..."
+    nvibrant "${NVIBRANT_ON[@]}"
+}
+
+wait_for_cs2() {
+    log "Waiting for CS2 process..."
+    while ! pgrep -f "bin/linuxsteamrt64/cs2" >/dev/null; do
+        sleep 1
+    done
+    log "CS2 detected."
+}
+
+monitor_cs2() {
+    while pgrep -f "bin/linuxsteamrt64/cs2" >/dev/null; do
+        sleep 5
+    done
+    log "CS2 exited."
+}
+
+# ==============================================================================
+# MAIN
+# ==============================================================================
+
+trap cleanup EXIT INT TERM
+
+patch_wayland
+enable_vibrance
+
+log "Launching CS2..."
+steam steam://rungameid/730 >/dev/null 2>&1 &
+
+wait_for_cs2
+monitor_cs2

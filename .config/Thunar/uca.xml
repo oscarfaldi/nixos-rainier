@@ -1,0 +1,449 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<actions>
+
+  <!-- ========================================== -->
+  <!-- 1. CORE SYSTEM ACTIONS                     -->
+  <!-- ========================================== -->
+
+  <action>
+    <icon>utilities-terminal</icon>
+    <name>Open Terminal Here</name>
+    <submenu/>
+    <unique-id>1781935446753343-101</unique-id>
+    <command>exo-open --working-directory %f --launch TerminalEmulator</command>
+    <description>Open terminal in current folder</description>
+    <range></range>
+    <patterns>*</patterns>
+    <startup-notify/>
+    <directories/>
+  </action>
+
+  <action>
+    <icon>dialog-information</icon>
+    <name>Inspect File</name>
+    <unique-id>1781935446753343-102</unique-id>
+    <command>inspect-file %f</command>
+    <description>Show detailed file information and metadata</description>
+    <range>*</range>
+    <patterns>*</patterns>
+    <directories/>
+    <audio-files/>
+    <image-files/>
+    <other-files/>
+    <text-files/>
+    <video-files/>
+  </action>
+  
+  <!-- ========================================== -->
+  <!-- 2. CLIPBOARD & PATH MANAGEMENT             -->
+  <!-- ========================================== -->
+
+  <action>
+    <icon>edit-copy</icon>
+    <name>Copy Full Path</name>
+    <submenu>Clipboard</submenu>
+    <unique-id>1781935446753343-201</unique-id>
+    <command>copy-full-path %f</command>
+    <description>Copy full file path</description>
+    <range>*</range>
+    <patterns>*</patterns>
+    <directories/>
+    <audio-files/>
+    <image-files/>
+    <other-files/>
+    <text-files/>
+    <video-files/>
+  </action>
+
+  <action>
+    <icon>edit-copy</icon>
+    <name>Copy Filename</name>
+    <submenu>Clipboard</submenu>
+    <unique-id>1781935446753343-202</unique-id>
+    <command>copy-filename %f</command>
+    <description>Copy filename</description>
+    <range>*</range>
+    <patterns>*</patterns>
+    <directories/>
+    <audio-files/>
+    <image-files/>
+    <other-files/>
+    <text-files/>
+    <video-files/>
+  </action>
+
+  <action>
+    <icon>edit-copy</icon>
+    <name>Copy Filename Without Extension</name>
+    <submenu>Clipboard</submenu>
+    <unique-id>1781935446753343-203</unique-id>
+    <command>copy-filename-no-extension %f</command>
+    <description>Copy filename without extension</description>
+    <range>*</range>
+    <patterns>*</patterns>
+    <directories/>
+    <audio-files/>
+    <image-files/>
+    <other-files/>
+    <text-files/>
+    <video-files/>
+  </action>
+
+  <!-- ========================================== -->
+  <!-- 3. DOCUMENT & ARCHIVE UTILITIES            -->
+  <!-- ========================================== -->
+
+  <action>
+    <icon>application-pdf</icon>
+    <name>Convert to PDF</name>
+    <submenu>Documents</submenu>
+    <unique-id>1781935446753343-301</unique-id>
+    <command>convert-to-pdf %F</command>
+    <description>Convert text, images, and Office documents to PDF</description>
+    <range>*</range>
+    <patterns>*.md;*.txt;*.doc;*.docx;*.odt;*.rtf;*.ppt;*.pptx;*.xls;*.xlsx;*.jpg;*.jpeg;*.png;*.tif;*.tiff</patterns>
+    <other-files/>
+    <text-files/>
+    <image-files/>
+  </action>
+
+  <action>
+    <icon>folder-remote</icon>
+    <name>Move to NAS Valhalla Videos Staging</name>
+    <submenu>NAS</submenu>
+    <unique-id>1782052090035038-302</unique-id>
+    <command>move-to-valhalla-videos-staging %F</command>
+    <description>Move selected video files to NAS staging area</description>
+    <range>*</range>
+    <patterns>
+        *.jpg;*.JPG;*.jpeg;*.JPEG;*.png;*.PNG;*.webp;*.WEBP;
+        *.avif;*.AVIF;*.gif;*.GIF;*.bmp;*.BMP;*.tif;*.TIF;
+        *.tiff;*.TIFF;*.heic;*.HEIC;*.heif;*.HEIF;*.jxl;*.JXL;
+        *.raw;*.RAW;*.dng;*.DNG;*.cr2;*.CR2;*.cr3;*.CR3;
+        *.nef;*.NEF;*.arw;*.ARW;*.rw2;*.RW2;*.orf;*.ORF;
+        *.mp4;*.MP4;*.mov;*.MOV;*.mkv;*.MKV;*.webm;*.WEBM;
+        *.avi;*.AVI;*.flv;*.FLV;*.wmv;*.WMV;*.m4v;*.M4V;
+        *.mts;*.MTS;*.m2ts;*.M2TS;*.ts;*.TS;*.mpeg;*.MPEG;
+        *.mpg;*.MPG;*.3gp;*.3GP;*.3g2;*.3G2;*.ogv;*.OGV;
+        *.vob;*.VOB;*.mxf;*.MXF;*.insv;*.INSV;*.lrv;*.LRV
+    </patterns>
+    <image-files/>
+    <video-files/>
+  </action>
+  
+  <action>
+    <icon>folder-remote</icon>
+    <name>Move to NAS Valhalla Pictures Staging</name>
+    <submenu>NAS</submenu>
+    <unique-id>1782052090035038-303</unique-id>
+    <command>move-to-valhalla-pictures-staging %F</command>
+    <description>Move selected media files to NAS staging area</description>
+    <range>*</range>
+    <patterns>
+        *.jpg;*.JPG;*.jpeg;*.JPEG;*.png;*.PNG;*.webp;*.WEBP;
+        *.avif;*.AVIF;*.gif;*.GIF;*.bmp;*.BMP;*.tif;*.TIF;
+        *.tiff;*.TIFF;*.heic;*.HEIC;*.heif;*.HEIF;*.jxl;*.JXL;
+        *.raw;*.RAW;*.dng;*.DNG;*.cr2;*.CR2;*.cr3;*.CR3;
+        *.nef;*.NEF;*.arw;*.ARW;*.rw2;*.RW2;*.orf;*.ORF;
+        *.mp4;*.MP4;*.mov;*.MOV;*.mkv;*.MKV;*.webm;*.WEBM;
+        *.avi;*.AVI;*.flv;*.FLV;*.wmv;*.WMV;*.m4v;*.M4V;
+        *.mts;*.MTS;*.m2ts;*.M2TS;*.ts;*.TS;*.mpeg;*.MPEG;
+        *.mpg;*.MPG;*.3gp;*.3GP;*.3g2;*.3G2;*.ogv;*.OGV;
+        *.vob;*.VOB;*.mxf;*.MXF;*.insv;*.INSV;*.lrv;*.LRV
+    </patterns>
+    <image-files/>
+    <video-files/>
+  </action>
+
+  <action>
+      <icon>folder-remote</icon>
+      <name>Move to NAS Music Staging</name>
+      <submenu>NAS</submenu>
+      <unique-id>1782052090035038-304</unique-id>
+      <command>move-to-media-music-staging %F</command>
+      <description>Move selected music folders to NAS staging area</description>
+      <range>*</range>
+      <directories/>
+  </action>
+  
+  <action>
+    <icon>package-x-generic</icon>
+    <name>Compress to ZIP</name>
+    <submenu>Documents</submenu>
+    <unique-id>1781935446753343-305</unique-id>
+    <command>compress-to-zip %F</command>
+    <description>Create ZIP archive from selected files</description>
+    <range>*</range>
+    <patterns>*</patterns>
+    <directories/>
+    <audio-files/>
+    <image-files/>
+    <other-files/>
+    <text-files/>
+    <video-files/>
+  </action>
+
+  <action>
+    <icon>package-x-generic</icon>
+    <name>Extract Archive Here</name>
+    <submenu>Documents</submenu>
+    <unique-id>1781935446753343-306</unique-id>
+    <command>extract-here %f</command>
+    <description>Extract archive contents into current folder</description>
+    <range>*</range>
+    <patterns>*.zip;*.7z;*.rar;*.tar;*.tar.gz;*.tgz;*.tar.xz</patterns>
+    <other-files/>
+  </action>
+
+  <!-- ========================================== -->
+  <!-- 4. IMAGE PROCESSING                        -->
+  <!-- ========================================== -->
+
+  <action>
+    <icon>image-x-generic</icon>
+    <name>Convert to AVIF</name>
+    <submenu>Media</submenu>
+    <unique-id>1781935446753343-401</unique-id>
+    <command>convert-to-avif %F</command>
+    <description>Convert image to AVIF</description>
+    <range>*</range>
+    <patterns>*.jpg;*.jpeg;*.png;*.webp;*.avif;*.gif;*.bmp;*.tif;*.tiff;*.svg;*.heic;*.heif</patterns>
+    <image-files/>
+  </action>
+
+  <action>
+    <icon>image-x-generic</icon>
+    <name>Convert to WebP</name>
+    <submenu>Media</submenu>
+    <unique-id>1781935446753401-115</unique-id>
+    <command>convert-to-webp %F</command>
+    <description>Convert image to WebP</description>
+    <range>*</range>
+    <patterns>*.jpg;*.jpeg;*.png;*.avif;*.gif;*.bmp;*.tif;*.tiff;*.heic;*.heif</patterns>
+    <image-files/>
+  </action>
+
+  <action>
+    <icon>image-x-generic</icon>
+    <name>Convert to PNG</name>
+    <submenu>Media</submenu>
+    <unique-id>1781935446753343-402</unique-id>
+    <command>convert-to-png %F</command>
+    <description>Convert image to PNG</description>
+    <range>*</range>
+    <patterns>*.jpg;*.jpeg;*.png;*.webp;*.avif;*.gif;*.bmp;*.tif;*.tiff;*.svg;*.heic;*.heif</patterns>
+    <image-files/>
+  </action>
+
+  <action>
+    <icon>image-x-generic</icon>
+    <name>Convert to JPEG</name>
+    <submenu>Media</submenu>
+    <unique-id>1781935446753343-403</unique-id>
+    <command>convert-to-jpeg %F</command>
+    <description>Convert image to JPEG</description>
+    <range>*</range>
+    <patterns>*.jpg;*.jpeg;*.png;*.webp;*.avif;*.gif;*.bmp;*.tif;*.tiff;*.svg;*.heic;*.heif</patterns>
+    <image-files/>
+  </action>
+
+  <action>
+    <icon>object-rotate-right</icon>
+    <name>Rotate Image Right</name>
+    <submenu>Media</submenu>
+    <unique-id>1781935446753343-404</unique-id>
+    <command>rotate-image-right %f</command>
+    <description>Rotate image 90° clockwise</description>
+    <range>*</range>
+    <patterns>*.jpg;*.jpeg;*.png;*.gif;*.webp;*.avif;*.bmp;*.tif;*.tiff</patterns>
+    <image-files/>
+  </action>
+
+  <action>
+    <icon>object-rotate-left</icon>
+    <name>Rotate Image Left</name>
+    <submenu>Media</submenu>
+    <unique-id>1781935446753343-405</unique-id>
+    <command>rotate-image-left %f</command>
+    <description>Rotate image 90° counter-clockwise</description>
+    <range>*</range>
+    <patterns>*.jpg;*.jpeg;*.png;*.gif;*.webp;*.avif;*.bmp;*.tif;*.tiff</patterns>
+    <image-files/>
+  </action>
+
+  <!-- ========================================== -->
+  <!-- 5. VIDEO PROCESSING                        -->
+  <!-- ========================================== -->
+
+  <action>
+    <icon>object-rotate-right</icon>
+    <name>Rotate Video Right</name>
+    <submenu>Media</submenu>
+    <unique-id>1781935446753343-501</unique-id>
+    <command>rotate-video-right %f</command>
+    <description>Rotate video 90° clockwise</description>
+    <range>*</range>
+    <patterns>*.mp4;*.MP4;*.mov;*.MOV;*.mkv;*.MKV;*.webm;*.mts;*.m2ts;*.ts</patterns>
+    <video-files/>
+  </action>
+
+  <action>
+    <icon>object-rotate-left</icon>
+    <submenu>Media</submenu>
+    <name>Rotate Video Left</name>
+    <unique-id>1781935446753343-502</unique-id>
+    <command>rotate-video-left %f</command>
+    <description>Rotate video 90° counter-clockwise</description>
+    <range>*</range>
+    <patterns>*.mp4;*.MP4;*.mov;*.MOV;*.mkv;*.MKV;*.webm;*.mts;*.m2ts;*.ts</patterns>
+    <video-files/>
+  </action>
+
+  <action>
+    <icon>video-x-generic</icon>
+    <name>Rename TS → MTS</name>
+    <submenu>Media</submenu>
+    <unique-id>1781935446753343-503</unique-id>
+    <command>rename-ts-to-mts %F</command>
+    <description>Rename TS files for better thumbnail and MIME support</description>
+    <range>*</range>
+    <patterns>*.ts</patterns>
+    <other-files/>
+  </action>
+
+  <action>
+    <icon>applications-multimedia</icon>
+    <name>Re-encode and Compress to HEVC MKV</name>
+    <submenu>Media</submenu>
+    <unique-id>1781935446753343-504</unique-id>
+    <command>/home/oscarfaldi/System/.config/quickshell/scripts/qs-job reencode-and-compress-to-hevc-mkv %F</command>
+    <description>Re-encode and compress selected videos to HEVC MKV for long-term storage</description>
+    <range>*</range>
+    <patterns>
+        *.mp4;*.MP4;*.mov;*.MOV;
+        *.mkv;*.MKV;*.webm;*.WEBM;
+        *.m4v;*.M4V;*.avi;*.AVI;
+        *.ts;*.TS;*.mts;*.MTS;
+        *.m2ts;*.M2TS;*.mxf;*.MXF;
+        *.wmv;*.WMV;*.asf;*.ASF;
+        *.mpg;*.MPG;*.mpeg;*.MPEG;
+        *.flv;*.FLV;*.f4v;*.F4V;
+        *.ogv;*.OGV;*.3gp;*.3GP;
+        *.3g2;*.3G2;*.vob;*.VOB;
+        *.divx;*.DIVX
+    </patterns>
+    <video-files/>
+  </action>
+
+  <action>
+    <icon>applications-multimedia</icon>
+    <name>Re-encode and Compress to HEVC MP4</name>
+    <submenu>Media</submenu>
+    <unique-id>1781935446753343-505</unique-id>
+    <command>/home/oscarfaldi/System/.config/quickshell/scripts/qs-job reencode-and-compress-to-hevc-mp4 %F</command>
+    <description>Re-encode and compress selected videos to HEVC MP4 for maximum compatibility</description>
+    <range>*</range>
+    <patterns>
+        *.mp4;*.MP4;*.mov;*.MOV;
+        *.mkv;*.MKV;*.webm;*.WEBM;
+        *.m4v;*.M4V;*.avi;*.AVI;
+        *.ts;*.TS;*.mts;*.MTS;
+        *.m2ts;*.M2TS;*.mxf;*.MXF;
+        *.wmv;*.WMV;*.asf;*.ASF;
+        *.mpg;*.MPG;*.mpeg;*.MPEG;
+        *.flv;*.FLV;*.f4v;*.F4V;
+        *.ogv;*.OGV;*.3gp;*.3GP;
+        *.3g2;*.3G2;*.vob;*.VOB;
+        *.divx;*.DIVX
+    </patterns>
+    <video-files/>
+  </action>
+
+  <action>
+    <icon>folder-videos</icon>
+    <name>Batch Re-encode and Compress to HEVC MKV</name>
+    <submenu>Media</submenu>
+    <unique-id>1781935446753343-506</unique-id>
+    <command>/home/oscarfaldi/System/.config/quickshell/scripts/qs-job batch-reencode-and-compress-to-hevc-mkv %f</command>
+    <description>Re-encode and compress every video in the selected folder to HEVC MKV (non-recursive)</description>
+    <range>*</range>
+    <directories/>
+  </action>
+
+  <action>
+    <icon>folder-videos</icon>
+    <name>Remux to MKV</name>
+    <submenu>Media</submenu>
+    <unique-id>1781935446753343-507</unique-id>
+    <command>/home/oscarfaldi/System/.config/quickshell/scripts/qs-job remux-to-mkv %F</command>
+    <description>Remux selected videos to MKV without re-encoding</description>
+    <range>*</range>
+    <patterns>
+        *.mp4;*.MP4;*.mov;*.MOV;
+        *.mkv;*.MKV;*.webm;*.WEBM;
+        *.m4v;*.M4V;*.avi;*.AVI;
+        *.ts;*.TS;*.mts;*.MTS;
+        *.m2ts;*.M2TS;*.mxf;*.MXF;
+        *.wmv;*.WMV;*.asf;*.ASF;
+        *.mpg;*.MPG;*.mpeg;*.MPEG;
+        *.flv;*.FLV;*.f4v;*.F4V;
+        *.ogv;*.OGV;*.3gp;*.3GP;
+        *.3g2;*.3G2;*.vob;*.VOB;
+        *.divx;*.DIVX
+    </patterns>
+    <video-files/>
+  </action>
+
+  <action>
+    <icon>folder-videos</icon>
+    <name>Remux to MP4</name>
+    <submenu>Media</submenu>
+    <unique-id>1781935446753343-508</unique-id>
+    <command>/home/oscarfaldi/System/.config/quickshell/scripts/qs-job remux-to-mp4 %F</command>
+    <description>Remux selected videos to MP4 without re-encoding</description>
+    <range>*</range>
+    <patterns>
+        *.mp4;*.MP4;*.mov;*.MOV;
+        *.mkv;*.MKV;*.webm;*.WEBM;
+        *.m4v;*.M4V;*.avi;*.AVI;
+        *.ts;*.TS;*.mts;*.MTS;
+        *.m2ts;*.M2TS;*.mxf;*.MXF;
+        *.wmv;*.WMV;*.asf;*.ASF;
+        *.mpg;*.MPG;*.mpeg;*.MPEG;
+        *.flv;*.FLV;*.f4v;*.F4V;
+        *.ogv;*.OGV;*.3gp;*.3GP;
+        *.3g2;*.3G2;*.vob;*.VOB;
+        *.divx;*.DIVX
+    </patterns>
+    <video-files/>
+  </action>
+
+  <!-- ========================================== -->
+  <!-- 6. CONTENT CREATION                        -->
+  <!-- ========================================== -->
+  
+  <action>
+    <icon>applications-multimedia</icon>
+    <name>Transcribe Video to SRT</name>
+    <submenu>Content Creation</submenu>
+    <unique-id>1781935446753343-601</unique-id>
+    <command>/home/oscarfaldi/System/.config/quickshell/scripts/qs-job transcribe-video %f</command>
+    <description>Generate Indonesian SRT subtitles using Faster-Whisper</description>
+    <range>*</range>
+    <patterns>*.mp4;*.MP4;*.mov;*.MOV;*.mkv;*.MKV;*.webm;*.mts;*.m2ts;*.ts;*.avi;*.mxf;*.m4v</patterns>
+    <video-files/>
+  </action>
+
+  <action>
+    <icon>edit-cut</icon>
+    <name>Auto-Cut Video</name>
+    <submenu>Content Creation</submenu>
+    <unique-id>1781935446753343-602</unique-id>
+    <command>auto-cut %F</command>
+    <description>Remove silent sections and create a Kdenlive rough cut</description>
+    <range>*</range>
+    <patterns>*.mp4;*.MP4;*.mov;*.MOV;*.mkv;*.MKV;*.webm;*.mts;*.m2ts;*.ts;*.avi;*.mxf;*.m4v</patterns>
+    <video-files/>
+  </action>
+
+</actions>

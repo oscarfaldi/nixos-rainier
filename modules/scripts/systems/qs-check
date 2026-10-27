@@ -1,0 +1,172 @@
+#!/usr/bin/env bash
+# Health check for the Quickshell stack.
+#
+# Everything the shell depends on, checked in the order a command travels: process -> command pipe ->
+# reader -> QML. The last step is a real round trip, because "the process exists" says nothing about
+# whether Mod+D reaches it - that exact gap once left every keybind dead while the bar looked fine.
+#
+#   qs-check           report only
+#   qs-check --fix     restart the shell through systemd when something downstream of it is dead
+
+set -uo pipefail
+
+runtime="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+config_dir="$HOME/System/.config/quickshell"
+state_file="$runtime/quickshell-shell.pid"
+ping_file="$runtime/qs-shell-ping"
+fix=0
+[ "${1:-}" = "--fix" ] && fix=1
+
+fails=0
+warns=0
+
+ok()   { printf '  \033[32m✓\033[0m %-32s %s\n' "$1" "${2:-}"; }
+bad()  { printf '  \033[31m✗\033[0m %-32s %s\n' "$1" "${2:-}"; fails=$((fails + 1)); }
+warn() { printf '  \033[33m!\033[0m %-32s %s\n' "$1" "${2:-}"; warns=$((warns + 1)); }
+
+echo
+echo "Quickshell health"
+echo "-----------------"
+
+# ------------------------------------------------------------------ process
+pid=""
+[ -r "$state_file" ] && read -r pid <"$state_file" || true
+
+if [[ -n "$pid" && -r "/proc/$pid/cmdline" ]] \
+   && tr '\0' ' ' <"/proc/$pid/cmdline" | grep -q "quickshell/main"; then
+    started=$(ps -o lstart= -p "$pid" 2>/dev/null | xargs)
+    ok "shell process" "pid $pid since $started"
+else
+    bad "shell process" "not running (pid file: ${pid:-empty})"
+    pid=""
+fi
+
+# The unit is what keeps it alive; without it a crash means no bar until the compositor restarts.
+if systemctl --user list-unit-files 2>/dev/null | grep -q '^quickshell.service'; then
+    state=$(systemctl --user is-active quickshell.service 2>/dev/null)
+    case "$state" in
+        active) ok "systemd unit" "active, Restart=always" ;;
+        *)      warn "systemd unit" "$state" ;;
+    esac
+else
+    warn "systemd unit" "not installed yet (started by niri directly)"
+fi
+
+# ------------------------------------------------------------------ session environment
+if [[ -n "$pid" && -r "/proc/$pid/environ" ]]; then
+    for var in WAYLAND_DISPLAY NIRI_SOCKET; do
+        if tr '\0' '\n' <"/proc/$pid/environ" | grep -q "^$var="; then
+            ok "$var" "$(tr '\0' '\n' <"/proc/$pid/environ" | grep -m1 "^$var=" | cut -d= -f2-)"
+        else
+            bad "$var" "missing - workspaces and popups will fail"
+        fi
+    done
+fi
+
+# ------------------------------------------------------------------ command pipe
+pipe="$runtime/quickshell-cmd-${pid:-0}"
+if [[ -n "$pid" && -p "$pipe" ]]; then
+    ok "command pipe" "$pipe"
+else
+    bad "command pipe" "missing $pipe"
+fi
+
+if [[ -n "$pid" ]] && pgrep -f "quickshell-cmd-$pid" >/dev/null 2>&1; then
+    ok "pipe reader" "attached"
+else
+    bad "pipe reader" "nobody is reading the pipe - every keybind is dead"
+fi
+
+# ------------------------------------------------------------------ end to end
+if [[ -n "$pid" && -p "$pipe" ]]; then
+    rm -f "$ping_file"
+    "$config_dir/scripts/qs-popup" ping >/dev/null 2>&1 || true
+    for _ in $(seq 1 25); do
+        [ -s "$ping_file" ] && break
+        sleep 0.04
+    done
+
+    if [ -s "$ping_file" ]; then
+        ok "command round trip" "ping answered in the QML"
+    else
+        bad "command round trip" "ping never came back"
+    fi
+fi
+
+# ------------------------------------------------------------------ lock screen
+if pgrep -f "quickshell -p .*quickshell/lock" >/dev/null 2>&1; then
+    ok "lock screen" "client running (session locked)"
+else
+    ok "lock screen" "idle (no client)"
+fi
+
+if [[ -f /etc/pam.d/qs-lock ]]; then
+    ok "pam service" "/etc/pam.d/qs-lock"
+else
+    bad "pam service" "qs-lock missing - the lock screen cannot ask for a password"
+fi
+
+if pgrep -x swayidle >/dev/null 2>&1; then
+    ok "idle policy" "swayidle running"
+else
+    warn "idle policy" "swayidle not running - no idle lock, no lock before sleep"
+fi
+
+# ------------------------------------------------------------------ theme state
+theme_dir="${XDG_STATE_HOME:-$HOME/.local/state}/theme"
+if [[ -r "$theme_dir/colors.toml" ]]; then
+    ok "theme" "$(basename "$(readlink -f "$theme_dir/colors.toml")") $(grep -m1 '^background' "$theme_dir/colors.toml" | cut -d= -f2 | tr -d ' \"')"
+else
+    bad "theme" "no palette in $theme_dir"
+fi
+
+for f in wallpaper niri.kdl starship.toml; do
+    [ -e "$theme_dir/$f" ] || warn "theme file" "$f missing"
+done
+
+# ------------------------------------------------------------------ recent errors
+log_dir="$runtime/quickshell/by-id"
+newest=$(ls -dt "$log_dir"/*/ 2>/dev/null | head -1)
+if [[ -n "${newest:-}" && -r "$newest/log.log" ]]; then
+    errs=$(grep -ai "ERROR" "$newest/log.log" 2>/dev/null | tail -3)
+    if [ -z "$errs" ]; then
+        ok "recent log" "no errors"
+    else
+        printf '  \033[33m!\033[0m %-32s %s\n' "recent log" "errors present:"
+        printf '%s\n' "$errs" | sed 's/^/      /'
+        warns=$((warns + 1))
+    fi
+else
+    warn "recent log" "no log found"
+fi
+
+# ------------------------------------------------------------------ verdict
+echo "-----------------"
+if [ "$fails" -eq 0 ]; then
+    printf '  \033[32m%d checks failed\033[0m (%d warnings)\n\n' "$fails" "$warns"
+    exit 0
+fi
+
+printf '  \033[31m%d checks failed\033[0m (%d warnings)\n' "$fails" "$warns"
+
+if [ "$fix" -eq 1 ]; then
+    echo
+    echo "  Restarting the shell..."
+    if systemctl --user cat quickshell.service >/dev/null 2>&1; then
+        systemctl --user restart quickshell.service
+    else
+        pkill -f "quickshell -p $config_dir/main" 2>/dev/null || true
+        sleep 1
+        setsid -f qs -p "$config_dir/main" >/dev/null 2>&1 </dev/null
+    fi
+    sleep 3
+    if pgrep -f "quickshell -p $config_dir/main" >/dev/null 2>&1; then
+        printf '  \033[32m✓\033[0m shell restarted, re-run qs-check to confirm\n\n'
+    else
+        printf '  \033[31m✗\033[0m the shell did not come back - check: journalctl --user -u quickshell -n 50\n\n'
+        exit 1
+    fi
+fi
+
+echo
+exit 1

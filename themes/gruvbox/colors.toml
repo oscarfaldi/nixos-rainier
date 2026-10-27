@@ -1,0 +1,54 @@
+gtk_theme = "gruvbox-dark"
+
+gtk_icons = "oomox-gruvbox-dark"
+
+# Window border: active = focused window, inactive = everything else. Kept lighter than
+# `muted` on purpose, otherwise the border vanishes against a dark wallpaper.
+border_active = "#d9a45f"
+border_inactive = "#7d5828"
+
+# GTK + icons are GENERATED from Nordic and recoloured to this palette, like the other palettes:
+# same skeleton, so every row height / indent / toolbar metric is identical across palettes. The
+# packaged gruvbox-dark (gtk_theme above) and its icon set stay only as fallbacks if generation
+# cannot run - nothing is lost. Folders use Papirus' brown variant.
+generate_gtk = "true"
+gtk_base = "Nordic"
+generate_icons = "true"
+icons_color = "brown"
+
+mode = "dark"
+
+# Warm accent on purpose. Omarchy's gruvbox blue (#7daea3) is teal, and once it is used for a
+# selected row, a window border or the terminal cursor on warm brown surfaces it reads as mint.
+# gtk_accent collapses every cool-hued result in the generated GTK theme into the same warm tone;
+# `accent` is the one the shell, bar and popup borders, btop and the editor follow.
+accent = "#ccc3a3"
+gtk_accent = "#ccc3a3"
+selection = "#504945"
+muted = "#665c54"
+
+background = "#282828"
+dark_background = "#1e1e1e"
+darker_background = "#161616"
+lighter_background = "#3c3836"
+
+foreground = "#d4be98"
+dark_foreground = "#7c6f64"
+light_foreground = "#bdae93"
+bright_foreground = "#d4be98"
+
+red = "#ea6962"
+yellow = "#d8a657"
+orange = "#e1875c"
+green = "#a9b665"
+cyan = "#89b482"
+blue = "#7daea3"
+magenta = "#d3869b"
+brown = "#70432e"
+
+bright_red = "#ea6962"
+bright_yellow = "#d8a657"
+bright_green = "#a9b665"
+bright_cyan = "#89b482"
+bright_blue = "#7daea3"
+bright_magenta = "#d3869b"

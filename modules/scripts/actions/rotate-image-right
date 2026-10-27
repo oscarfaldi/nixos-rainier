@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+
+# ==============================================================================
+# Script Name: Rotate Image Right (Overwrite)
+# Description: Rotates the selected image 90 degrees clockwise 
+#              and overwrites the original file directly.
+# ==============================================================================
+
+set -euo pipefail
+
+# 0. Safety Check: Ensure an image file was selected
+if [ $# -eq 0 ]; then
+    notify-send -i dialog-error "Image Rotation" "No image selected."
+    exit 1
+fi
+
+FILE="$1"
+
+# 1. Execute rotation directly on the source file
+if magick "$FILE" -rotate 90 "$FILE"; then
+    notify-send -i image-x-generic "Image Rotation" "Image rotated 90° clockwise."
+else
+    notify-send -i dialog-error "Image Rotation" "Rotation failed."
+fi

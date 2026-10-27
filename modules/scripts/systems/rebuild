@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+
+# ==============================================================================
+# Rainier System Rebuild Script
+# 
+# Description: Builds and activates the current NixOS configuration, 
+#              then displays the active system version details.
+# ==============================================================================
+
+# Exit immediately if a command exits with a non-zero status
+set -e
+
+# ------------------------------------------------------------------------------
+# Configuration & Variables
+# ------------------------------------------------------------------------------
+SYSTEM_DIR="$HOME/System"
+CONFIG="$SYSTEM_DIR/configuration.nix"
+
+# ------------------------------------------------------------------------------
+# UI Helper Functions
+# ------------------------------------------------------------------------------
+print_header() {
+    local title="$1"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo " $title"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo
+}
+
+# ------------------------------------------------------------------------------
+# Main Execution
+# ------------------------------------------------------------------------------
+main() {
+    print_header "Rainier Rebuild"
+    echo "Building system..."
+    echo
+
+    # Execute NixOS rebuild with explicit configuration path
+    # CRITICAL FIX: Combined the multiline command properly using '\'
+    sudo nixos-rebuild switch \
+        --flake "$SYSTEM_DIR#rainier"
+
+    echo
+    print_header "Rebuild Complete"
+
+    # Display System Metadata
+    echo "Hostname : $(hostname)"
+    echo "Version  : $(nixos-version)"
+    echo
+    echo "✓ System successfully activated."
+}
+
+# Run the main function
+main "$@"

@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+
+# Power menu.
+#
+# The menu itself lives in the shell now (SystemPopup: lock / logout / suspend / restart / shutdown),
+# reached with `qs-popup power` - the same thing Mod+Shift+Q and the bar's power circle do. This
+# script stays as the entry point the .desktop file execs, so nothing else has to change.
+
+set -u
+
+qs_popup="${HOME}/System/.config/quickshell/scripts/qs-popup"
+
+exec "$qs_popup" power

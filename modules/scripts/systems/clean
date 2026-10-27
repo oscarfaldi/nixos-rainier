@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+
+# ============================================================
+# Nix Store Cleanup
+# Removes old system generations, optimises the Nix store,
+# and reports reclaimed disk space after maintenance.
+# ============================================================
+
+set -e
+
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo " Rainier Cleanup"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo
+
+echo "Calculating current store size..."
+echo "This may take a minute on large stores."
+echo
+
+before=$(du -sb /nix/store | awk '{print $1}')
+
+echo "Removing old generations..."
+sudo nix-collect-garbage -d
+
+echo
+echo "Optimising Nix store..."
+echo "This may take a few minutes..."
+echo
+
+sudo nix-store --optimise
+
+echo
+echo "Calculating final store size..."
+echo
+
+after=$(du -sb /nix/store | awk '{print $1}')
+
+saved=$((before - after))
+
+echo
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo " Results"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo
+
+echo "Store before : $(numfmt --to=iec-i --suffix=B "$before")"
+echo "Store after  : $(numfmt --to=iec-i --suffix=B "$after")"
+echo "Saved        : $(numfmt --to=iec-i --suffix=B "$saved")"
+echo
+
+echo "✓ Cleanup complete."

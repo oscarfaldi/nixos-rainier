@@ -1,0 +1,107 @@
+#!/usr/bin/env python3
+"""Derive the starship prompt palette from a theme palette.
+
+Why a helper instead of role names: the prompt draws light text on coloured blocks, so every block
+colour has to stay dark. Palette roles cannot guarantee that - gruvbox's accent is a pale cream
+(#ccc3a3), which as a block background made its own text unreadable (measured 1.02:1).
+
+So the blocks are mixes of the theme background with the theme accent at a fixed ladder of weights.
+Each theme keeps its own hue, the text keeps its contrast, and the steps stay far enough apart for
+the powerline arrows to read.
+
+Usage: theme-prompt-palette <colors.toml>
+Output: [palettes.qs] TOML block on stdout.
+"""
+import sys
+
+ROLES = ("background", "foreground", "accent", "red", "green", "muted", "selection")
+
+
+def read_palette(path):
+    out = {}
+    for line in open(path, encoding="utf-8"):
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        out[key.strip()] = value.strip().strip('"')
+    return out
+
+
+def to_rgb(hexv):
+    h = hexv.lstrip("#")
+    return [int(h[i:i + 2], 16) for i in (0, 2, 4)]
+
+
+def to_hex(rgb):
+    return "#%02x%02x%02x" % tuple(max(0, min(255, round(c))) for c in rgb)
+
+
+def mix(a, b, weight):
+    """Mix b into a by weight (0 = a, 1 = b)."""
+    ra, rb = to_rgb(a), to_rgb(b)
+    return to_hex([ra[i] + (rb[i] - ra[i]) * weight for i in range(3)])
+
+
+def lum(hexv):
+    r, g, b = (c / 255 for c in to_rgb(hexv))
+
+    def f(c):
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+
+    return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b)
+
+
+def contrast(a, b):
+    la, lb = lum(a), lum(b)
+    hi, lo = max(la, lb), min(la, lb)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def main():
+    palette = read_palette(sys.argv[1])
+    bg = palette.get("background", "#282828")
+    fg = palette.get("foreground", "#ebdbb2")
+    accent = palette.get("accent", fg)
+
+    # Ladder: the first block is the most tinted, the last is the plain background. The scale is
+    # shrunk until the theme's own foreground stays readable on the lightest block - gruvbox and nord
+    # carry a pale foreground, and a fixed ladder pushed their first block to ~2.5:1.
+    base = [0.62, 0.46, 0.34, 0.24, 0.16, 0.08, 0.0]
+    scale = 1.0
+    while scale > 0.2:
+        blocks = [mix(bg, accent, w * scale) for w in base]
+        if contrast(fg, blocks[0]) >= 4.6:
+            break
+        scale -= 0.05
+
+    blocks = [mix(bg, accent, w * scale) for w in base]
+
+    values = {
+        "color_fg0": fg,
+        "color_orange": blocks[0],
+        "color_yellow": blocks[1],
+        "color_aqua": blocks[2],
+        "color_blue": blocks[3],
+        "color_purple": blocks[4],
+        "color_bg3": blocks[5],
+        "color_bg1": blocks[6],
+        # status colours stay semantic but are darkened so they can also be used as a block
+        "color_red": palette.get("red", "#e06c75"),
+        "color_green": palette.get("bright_green", palette.get("green", "#a9b665")),
+    }
+
+    print("[palettes.qs]")
+    for key, value in values.items():
+        print('%s = "%s"' % (key, value))
+
+    # a self-check that fails loudly instead of shipping an unreadable prompt
+    worst_text = min(contrast(fg, blocks[i]) for i in range(len(blocks)))
+    worst_step = min(contrast(blocks[i], blocks[i + 1]) for i in range(len(blocks) - 1))
+    print("# fg-on-block min %.2f, block step min %.2f" % (worst_text, worst_step), file=sys.stderr)
+    if worst_text < 4.0:
+        print("# WARNING: prompt text contrast below 4.0", file=sys.stderr)
+
+
+if __name__ == "__main__":
+    main()

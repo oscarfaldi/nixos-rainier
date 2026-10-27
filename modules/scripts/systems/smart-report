@@ -1,0 +1,620 @@
+#!/usr/bin/env bash
+# =============================================================================
+# smart-report — read-only SMART health report for all attached disks.
+#
+#   * Renders a clean, human-friendly report (report window, or terminal).
+#   * The ONLY health verdicts come from smartctl itself:
+#       - "SMART overall-health self-assessment test result: PASSED / FAILED"
+#       - the ATA attribute "WHEN_FAILED" column (FAILING_NOW / In_the_past)
+#   * This script never starts a self-test and adds no health scoring of its
+#     own — it only reformats and adds unit conversions (bytes -> TB,
+#     hours -> months, raw counters with thousand separators).
+#
+#   Requirements : bash >= 4.3, smartmontools (smartctl), jq, lsblk
+#                  Quickshell shell (report window); plain terminal otherwise
+#
+#   Usage:
+#     smart-report                     scan every disk (report window when a display exists)
+#     smart-report --device /dev/sda   scan a single disk
+#     smart-report --terminal          force terminal output
+#     smart-report --no-color          disable ANSI colours (terminal only)
+# =============================================================================
+set -uo pipefail
+
+# ------------------------------------------------------------------ options
+DEV_FILTER=""
+FORCE_TERMINAL=0
+NO_COLOR=0
+
+# -------------------------------------------------------- global state
+HAS_SUDO=1
+SHOW_SUDO_HINT=0
+OUT_MODE="terminal"
+SUMMARY_ROWS=()
+DETAILS_TMP=""
+
+# ------------------------------------------------------ colour/style codes
+c_grn=""; c_red=""; c_yel=""; c_reset=""
+
+trap '[[ -n $DETAILS_TMP ]] && rm -f "$DETAILS_TMP"' EXIT
+
+# Report renderer: a REAL window in the Quickshell shell (theme, tiling, resize, close key),
+# The contract is one line into the
+# shell's command FIFO: `dialog <kind> <path>`; the first line of the report is `TITLE: <title>`.
+REPORT="${XDG_RUNTIME_DIR:-/tmp}/qs-report-smart.txt"
+
+show_report() {
+    # IPC, not the command FIFO: the FIFO is tuned for keybind latency, while a report dialog is
+    # already slow (ffprobe/exiftool/smartctl) and needs a guaranteed delivery. `qs ipc` costs ~40 ms.
+    local state="${XDG_RUNTIME_DIR:-/tmp}/quickshell-shell.pid"
+    local pid=""
+    # `read` fails at EOF when the file has no trailing newline; keep whatever it managed to read.
+    [ -r "$state" ] && { read -r pid < "$state" || true; }
+
+    if [ -z "${pid:-}" ] || [ ! -r "/proc/$pid/comm" ]; then
+        pid=$(pgrep -f "quickshell -p ${HOME}/System/.config/quickshell/main" | head -1)
+    fi
+
+    [ -n "${pid:-}" ] || return 1
+
+    qs ipc --pid "$pid" call shell run "dialog $1 $2" >/dev/null 2>&1 || return 1
+    return 0
+}
+
+
+# ================================================================ helpers
+die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+
+usage() {
+    cat <<'EOF'
+smart-report — read-only SMART health report for all disks
+
+Usage:
+  smart-report                      scan every disk (report window when a display exists)
+  smart-report --device /dev/sda    scan a single disk
+  smart-report --terminal           print to the terminal instead of the report window
+  smart-report --no-color           plain output, no ANSI colours
+  smart-report -h | --help          show this help
+
+The report only READS SMART data. It never starts a self-test.
+EOF
+}
+
+# thousand separators: 1234567 -> 1,234,567
+group() {
+    local n=$1
+    [[ $n =~ ^[0-9]+$ ]] || { printf '%s' "$n"; return; }
+    awk -v n="$n" 'BEGIN{
+        out=""
+        while (length(n) > 3) {
+            out = "," substr(n, length(n)-2) out
+            n = substr(n, 1, length(n)-3)
+        }
+        printf "%s%s", n, out
+    }'
+}
+
+# bytes -> human capacity
+fmt_cap() {
+    awk -v b="$1" 'BEGIN{
+        if (b >= 1e12)      printf "%.2f TB", b/1e12
+        else if (b >= 1e9)  printf "%.2f GB", b/1e9
+        else if (b >= 1e6)  printf "%.1f MB", b/1e6
+        else                printf "%.0f B",  b
+    }'
+}
+
+# hours -> "7,716 h (~10.6 mo)"
+fmt_hours() {
+    local h=$1
+    [[ -z $h || $h =~ [^0-9] ]] && { printf 'n/a'; return; }
+    local gh; gh=$(group "$h")
+    if   (( h >= 8760 )); then awk -v g="$gh" -v h="$h" 'BEGIN{printf "%s h (~%.1f yr)", g, h/8760}'
+    elif (( h >= 730 ));  then awk -v g="$gh" -v h="$h" 'BEGIN{printf "%s h (~%.1f mo)", g, h/730}'
+    elif (( h >= 48 ));   then awk -v g="$gh" -v h="$h" 'BEGIN{printf "%s h (~%.1f d)",  g, h/24}'
+    else                        printf '%s h' "$gh"; fi
+}
+
+# NVMe data units (512000 bytes each) -> TB/GB
+fmt_tb_nvme() {
+    awk -v n="$1" 'BEGIN{
+        b = n * 512000
+        if (b >= 1e12)      printf "%.2f TB", b/1e12
+        else if (b >= 1e9)  printf "%.1f GB", b/1e9
+        else                printf "%.0f B",  b
+    }'
+}
+
+# ATA LBA/sector count (512 bytes each) -> TB/GB
+fmt_tb_sectors() {
+    awk -v n="$1" 'BEGIN{
+        b = n * 512
+        if (b >= 1e12)      printf "%.2f TB", b/1e12
+        else if (b >= 1e9)  printf "%.1f GB", b/1e9
+        else                printf "%.0f B",  b
+    }'
+}
+
+# 32MiB units -> TB/GB
+fmt_tb_32m() {
+    awk -v n="$1" 'BEGIN{
+        b = n * 32 * 1048576
+        if (b >= 1e12)      printf "%.2f TB", b/1e12
+        else if (b >= 1e9)  printf "%.1f GB", b/1e9
+        else                printf "%.0f B",  b
+    }'
+}
+
+short() {
+    local s=$1 n=${2:-20}
+    (( ${#s} > n )) && printf '%s…' "${s:0:n-1}" || printf '%s' "$s"
+}
+
+# -------------------------------------------------------------- layout
+underline() { printf '%s\n' "$1" | sed 's/./─/g'; }
+
+section() {
+    echo
+    echo "$1"
+    underline "$1"
+}
+
+field() {
+    printf '  %-32s %s\n' "$1:" "${2:-n/a}"
+}
+
+disk_sep() {
+    echo
+    printf '═%.0s' {1..74}
+    echo
+}
+
+# ------------------------------------------------------------- verdict fmt
+fmt_passed() {
+    case $1 in
+        true)  printf '%s✔ PASSED%s' "$c_grn" "$c_reset" ;;
+        false) printf '%s✘ FAILED%s' "$c_red" "$c_reset" ;;
+        *)     printf 'n/a' ;;
+    esac
+}
+
+# status cell for the summary table (padded to fixed width, then coloured)
+fmt_status() {
+    local p=$1 s
+    case $p in
+        true)  s="PASSED" ;;
+        false) s="FAILED" ;;
+        *)     s="n/a" ;;
+    esac
+    s=$(printf '%-9s' "$s")
+    case $p in
+        true)  printf '%s%s%s' "$c_grn" "$s" "$c_reset" ;;
+        false) printf '%s%s%s' "$c_red" "$s" "$c_reset" ;;
+        *)     printf '%s'   "$s" ;;
+    esac
+}
+
+fmt_when_failed() {
+    local wf=$1
+    case $wf in
+        "")          printf '%s' '-' ;;
+        FAILING_NOW) printf '%s%s%s' "$c_red" "$wf" "$c_reset" ;;
+        In_the_past) printf '%s%s%s' "$c_yel" "$wf" "$c_reset" ;;
+        *)           printf '%s' "$wf" ;;
+    esac
+}
+
+fmt_raw() {
+    local rs=$1 rv=$2
+    if [[ -z $rs ]]; then
+        group "$rv"
+    elif [[ $rs =~ ^[0-9]+$ ]]; then
+        group "$rs"
+    else
+        printf '%s' "$rs"
+    fi
+}
+
+# decode NVMe critical-warning bits (NVMe spec bitfield, not our opinion)
+cw_desc() {
+    local cw=$1 bits=()
+    (( cw == 0 )) && { printf 'none'; return; }
+    (( cw & 0x01 )) && bits+=("available spare below threshold")
+    (( cw & 0x02 )) && bits+=("temperature above threshold")
+    (( cw & 0x04 )) && bits+=("reliability degraded")
+    (( cw & 0x08 )) && bits+=("entered read-only mode")
+    (( cw & 0x10 )) && bits+=("volatile memory backup failed")
+    local IFS=', '
+    printf '%s' "${bits[*]}"
+}
+
+# ---------------------------------------------------------- smartctl fetch
+run_smartctl() {
+    if (( EUID == 0 )); then
+        smartctl "$@" 2>/dev/null
+    else
+        sudo smartctl "$@" 2>/dev/null
+    fi
+}
+
+fetch_smart() {
+    local dev=$1 out
+    out=$(run_smartctl --json -a "$dev")
+    if jq -e . >/dev/null 2>&1 <<<"$out"; then printf '%s' "$out"; return 0; fi
+    # many USB enclosures expose the disk behind an ATA-over-SAT bridge
+    out=$(run_smartctl --json -d sat -a "$dev")
+    if jq -e . >/dev/null 2>&1 <<<"$out"; then printf '%s' "$out"; return 0; fi
+    return 1
+}
+
+list_disks() {
+    local filter=${1:-}
+    if [[ -n $filter ]]; then
+        lsblk -d -p -J -o NAME,TYPE,MODEL,TRAN "$filter" 2>/dev/null \
+            | jq -r '.blockdevices[] | [.name, (.model // ""), (.tran // "")] | @tsv'
+    else
+        lsblk -d -p -J -o NAME,TYPE,MODEL,TRAN 2>/dev/null \
+            | jq -r '.blockdevices[]
+                | select(.type == "disk")
+                | select(.tran != null or (.name | startswith("/dev/nvme")))
+                | [.name, (.model // ""), (.tran // "")] | @tsv'
+    fi
+}
+
+# ======================================================= render: unsupported
+render_unsupported() {
+    local dev=$1 model=$2 tran=$3
+    disk_sep
+    printf '  %s\n' "$dev"
+    field "Model" "${model:-n/a}"
+    field "Transport" "${tran:-unknown}"
+    field "SMART" "not supported / not accessible"
+    if (( SHOW_SUDO_HINT )); then
+        field "Hint" "run 'sudo -v' first, or launch from a terminal"
+    fi
+}
+
+# ============================================================ render: NVMe
+render_nvme() {
+    local dev=$1 json=$2
+
+    local model serial fw cap ver passed temp hours cycles
+    model=$(jq -r '.model_name // "unknown"' <<<"$json")
+    serial=$(jq -r '.serial_number // "n/a"' <<<"$json")
+    fw=$(jq -r '.firmware_version // "n/a"' <<<"$json")
+    cap=$(jq -r '.nvme_total_capacity // 0' <<<"$json")
+    ver=$(jq -r '.nvme_version.string // ""' <<<"$json")
+    passed=$(jq -r '.smart_status.passed // "unknown"' <<<"$json")
+    temp=$(jq -r '.temperature.current // ""' <<<"$json")
+    hours=$(jq -r '.power_on_time.hours // ""' <<<"$json")
+    cycles=$(jq -r '.power_cycle_count // ""' <<<"$json")
+
+    local hl='.nvme_smart_health_information_log'
+    local cw spare spare_thr used dur duw hrc hwc cbt unsafe media errl wtm ctm sensors
+    cw=$(jq -r "$hl.critical_warning // 0" <<<"$json")
+    spare=$(jq -r "$hl.available_spare // \"\"" <<<"$json")
+    spare_thr=$(jq -r "$hl.available_spare_threshold // \"\"" <<<"$json")
+    used=$(jq -r "$hl.percentage_used // 0" <<<"$json")
+    dur=$(jq -r "$hl.data_units_read // 0" <<<"$json")
+    duw=$(jq -r "$hl.data_units_written // 0" <<<"$json")
+    hrc=$(jq -r "$hl.host_read_commands // $hl.host_reads // 0" <<<"$json")
+    hwc=$(jq -r "$hl.host_write_commands // $hl.host_writes // 0" <<<"$json")
+    cbt=$(jq -r "$hl.controller_busy_time // 0" <<<"$json")
+    unsafe=$(jq -r "$hl.unsafe_shutdowns // 0" <<<"$json")
+    media=$(jq -r "$hl.media_errors // 0" <<<"$json")
+    errl=$(jq -r "$hl.num_err_log_entries // 0" <<<"$json")
+    wtm=$(jq -r "$hl.warning_temp_time // 0" <<<"$json")
+    ctm=$(jq -r "$hl.critical_comp_time // 0" <<<"$json")
+    sensors=$(jq -r "($hl.temperature_sensors // []) | map(select(. != null)) | map(tostring + \" °C\") | join(\", \")" <<<"$json")
+
+    # summary row
+    local dev_b model_s status_s temp_s hours_s used_s
+    dev_b=$(basename "$dev")
+    model_s=$(short "$model" 26)
+    status_s=$(fmt_status "$passed")
+    temp_s=$(printf '%-7s' "$([[ -n $temp ]] && printf '%s °C' "$temp" || printf 'n/a')")
+    hours_s=$(printf '%-9s' "$([[ -n $hours ]] && group "$hours" || printf 'n/a')")
+    used_s=$(printf '%-5s' "${used}%")
+    SUMMARY_ROWS+=("$(printf '  %-12s  %-26s  %-6s  %s  %s  %s  %s' \
+        "$dev_b" "$model_s" "NVMe" "$status_s" "$temp_s" "$hours_s" "$used_s")")
+
+    # detail
+    disk_sep
+    printf '  %s  ·  %s\n' "$dev" "$model"
+    disk_sep
+
+    section "DEVICE INFO"
+    field "Model Number" "$model"
+    field "Serial Number" "$serial"
+    field "Firmware Version" "$fw"
+    field "Type" "NVMe SSD"
+    field "Total Capacity" "$(fmt_cap "$cap")"
+    [[ -n $ver ]] && field "NVMe Version" "$ver"
+
+    section "SMART STATUS"
+    field "Overall health self-assessment" "$(fmt_passed "$passed")"
+
+    section "HEALTH INFORMATION (NVMe Log 0x02)"
+    field "Critical Warning" "$(printf '0x%02x' "$cw")  ($(cw_desc "$cw"))"
+    field "Temperature" "$([[ -n $temp ]] && printf '%s °C' "$temp" || printf 'n/a')"
+    [[ -n $spare ]] && field "Available Spare" "$spare%"
+    [[ -n $spare_thr ]] && field "Available Spare Threshold" "$spare_thr%"
+    field "Percentage Used" "$used%  ($((100 - used))% remaining)"
+    field "Data Units Read" "$(group "$dur")  [$(fmt_tb_nvme "$dur")]"
+    field "Data Units Written" "$(group "$duw")  [$(fmt_tb_nvme "$duw")]"
+    field "Host Read Commands" "$(group "$hrc")"
+    field "Host Write Commands" "$(group "$hwc")"
+    field "Controller Busy Time" "$(group "$cbt") min"
+    field "Power Cycles" "$([[ -n $cycles ]] && group "$cycles" || printf 'n/a')"
+    field "Power On Hours" "$(fmt_hours "$hours")"
+    field "Unsafe Shutdowns" "$(group "$unsafe")"
+    field "Media and Data Integrity Errors" "$(group "$media")"
+    field "Error Information Log Entries" "$(group "$errl")"
+    field "Warning Comp. Temperature Time" "$(group "$wtm") min"
+    field "Critical Comp. Temperature Time" "$(group "$ctm") min"
+    [[ -n $sensors ]] && field "Temperature Sensors" "$sensors"
+
+    section "ERROR INFORMATION (NVMe Log 0x01)"
+    local err_entries
+    err_entries=$(jq -r '(.nvme_error_information_log.table // []) | length' <<<"$json")
+    if (( err_entries == 0 )); then
+        echo '  No Errors Logged'
+    else
+        field "Entries" "$err_entries"
+        while IFS= read -r e; do
+            printf '  %s\n' "$e"
+        done < <(jq -r '.nvme_error_information_log.table[]? | "    #\(.error_count // 0)  \(.status_field.string // "-")"' <<<"$json")
+    fi
+
+    section "SELF-TEST LOG (NVMe Log 0x06)"
+    local st_status st_count
+    st_status=$(jq -r '.nvme_self_test_log.current_self_test_operation.string // ""' <<<"$json")
+    st_count=$(jq -r '(.nvme_self_test_log.table // []) | length' <<<"$json")
+    [[ -n $st_status ]] && field "Self-test status" "$st_status"
+    if (( st_count == 0 )); then
+        echo '  No self-tests logged'
+    else
+        while IFS= read -r s; do
+            printf '  %s\n' "$s"
+        done < <(jq -r '.nvme_self_test_log.table[]? | "    \(.self_test_code.string // "?")  \(.self_test_result.string // "?")  (at \(.power_on_hours // "?") h)"' <<<"$json")
+    fi
+}
+
+# ============================================================== render: ATA
+render_ata() {
+    local dev=$1 json=$2
+
+    local model family serial fw rot form cap sata_ver if_speed iface passed temp hours cycles typ
+    model=$(jq -r '.model_name // "unknown"' <<<"$json")
+    family=$(jq -r '.model_family // ""' <<<"$json")
+    serial=$(jq -r '.serial_number // "n/a"' <<<"$json")
+    fw=$(jq -r '.firmware_version // "n/a"' <<<"$json")
+    rot=$(jq -r '.rotation_rate // 0' <<<"$json")
+    form=$(jq -r '.form_factor.name // ""' <<<"$json")
+    cap=$(jq -r '.user_capacity.bytes // 0' <<<"$json")
+    sata_ver=$(jq -r '.sata_version.string // ""' <<<"$json")
+    if_speed=$(jq -r '.interface_speed.current.string // .interface_speed.max.string // ""' <<<"$json")
+    passed=$(jq -r '.smart_status.passed // "unknown"' <<<"$json")
+    temp=$(jq -r '.temperature.current // ""' <<<"$json")
+    hours=$(jq -r '.power_on_time.hours // ""' <<<"$json")
+    cycles=$(jq -r '.power_cycle_count // ""' <<<"$json")
+
+    local is_ssd=1
+    [[ $rot =~ ^[0-9]+$ && $rot -gt 0 ]] && is_ssd=0
+    if (( is_ssd )); then typ="SATA"; else typ="HDD"; fi
+
+    iface=""
+    [[ -n $sata_ver ]] && iface="SATA $sata_ver"
+    [[ -n $if_speed ]] && { [[ -n $iface ]] && iface+=" · "; iface+="$if_speed"; }
+    [[ -z $iface ]] && iface="n/a"
+
+    # summary row
+    local dev_b model_s status_s temp_s hours_s used_s
+    dev_b=$(basename "$dev")
+    model_s=$(short "$model" 26)
+    status_s=$(fmt_status "$passed")
+    temp_s=$(printf '%-7s' "$([[ -n $temp ]] && printf '%s °C' "$temp" || printf 'n/a')")
+    hours_s=$(printf '%-9s' "$([[ -n $hours ]] && group "$hours" || printf 'n/a')")
+    used_s=$(printf '%-5s' "-")
+    SUMMARY_ROWS+=("$(printf '  %-12s  %-26s  %-6s  %s  %s  %s  %s' \
+        "$dev_b" "$model_s" "$typ" "$status_s" "$temp_s" "$hours_s" "$used_s")")
+
+    # detail
+    disk_sep
+    printf '  %s  ·  %s\n' "$dev" "$model"
+    disk_sep
+
+    section "DEVICE INFO"
+    field "Device Model" "$model"
+    [[ -n $family ]] && field "Model Family" "$family"
+    field "Serial Number" "$serial"
+    field "Firmware Version" "$fw"
+    field "Type" "$([[ $is_ssd -eq 1 ]] && printf 'SATA SSD' || printf 'HDD')"
+    field "Capacity" "$(fmt_cap "$cap")"
+    (( is_ssd == 0 )) && field "Rotation Rate" "$(group "$rot") rpm"
+    [[ -n $form ]] && field "Form Factor" "$form"
+    field "Interface" "$iface"
+
+    section "SMART STATUS"
+    field "Overall health self-assessment" "$(fmt_passed "$passed")"
+
+    section "POWER-ON STATISTICS"
+    field "Power On Hours" "$(fmt_hours "$hours")"
+    field "Power Cycles" "$([[ -n $cycles ]] && group "$cycles" || printf 'n/a')"
+    field "Temperature" "$([[ -n $temp ]] && printf '%s °C' "$temp" || printf 'n/a')"
+
+    section "SMART ATTRIBUTES"
+    printf '  %3s  %-26s  %5s  %5s  %6s  %-12s  %s\n' \
+        "ID" "ATTRIBUTE NAME" "VALUE" "WORST" "THRESH" "WHEN_FAILED" "RAW VALUE"
+    while IFS=$'\t' read -r id name value worst thresh wf raw_str raw_val; do
+        printf '  %3s  %-26s  %5s  %5s  %6s  %-12s  %s\n' \
+            "$id" "$name" "$value" "$worst" "$thresh" \
+            "$(fmt_when_failed "$wf")" "$(fmt_raw "$raw_str" "$raw_val")"
+    done < <(jq -r '.ata_smart_attributes.table[]? | [.id, .name, (.value // 0), (.worst // 0), (.thresh // 0), (.when_failed // ""), (.raw.string // ""), (.raw.value // 0)] | @tsv' <<<"$json")
+
+    # endurance (computed from LBA counters — pure unit conversion)
+    local tbw_name="" tbw_val=""
+    while IFS=$'\t' read -r n v; do
+        if [[ $n =~ Total_LBAs_Written ]]; then tbw_name=$n; tbw_val=$v; break; fi
+    done < <(jq -r '.ata_smart_attributes.table[]? | [.name, (.raw.value // 0)] | @tsv' <<<"$json")
+    if [[ -z $tbw_name ]]; then
+        while IFS=$'\t' read -r n v; do
+            if [[ $n =~ 32MiB|32MiB_Writes ]]; then tbw_name=$n; tbw_val=$v; break; fi
+        done < <(jq -r '.ata_smart_attributes.table[]? | [.name, (.raw.value // 0)] | @tsv' <<<"$json")
+    fi
+    if [[ -n $tbw_name && $tbw_val =~ ^[0-9]+$ && $tbw_val -gt 0 ]]; then
+        section "ENDURANCE (computed)"
+        local tbw_str
+        if [[ $tbw_name =~ 32MiB ]]; then tbw_str=$(fmt_tb_32m "$tbw_val"); else tbw_str=$(fmt_tb_sectors "$tbw_val"); fi
+        field "Data Written" "$tbw_str"
+        if [[ $hours =~ ^[0-9]+$ && $hours -gt 0 ]]; then
+            local rate
+            if [[ $tbw_name =~ 32MiB ]]; then
+                rate=$(awk -v h="$hours" -v n="$tbw_val" 'BEGIN{printf "%.1f GB/h", n*32*1048576/h/1e9}')
+            else
+                rate=$(awk -v h="$hours" -v n="$tbw_val" 'BEGIN{printf "%.1f GB/h", n*512/h/1e9}')
+            fi
+            field "Avg Write Rate" "$rate"
+        fi
+    fi
+
+    section "ERROR LOG"
+    local elog
+    elog=$(jq -r '.ata_smart_error_log.summary.count // .ata_smart_error_log.count // 0' <<<"$json")
+    field "SMART Error Log" "$(group "$elog") entries"
+
+    section "SELF-TEST LOG"
+    local st
+    st=$(jq -r '.ata_smart_self_test_log.standard.table[0] // null' <<<"$json")
+    if [[ $st == null || -z $st ]]; then
+        echo '  No self-tests logged'
+    else
+        local s_t s_s s_h
+        s_t=$(jq -r '.type.string // .type.value // "?"' <<<"$st")
+        s_s=$(jq -r '.status.string // .status.value // "?"' <<<"$st")
+        s_h=$(jq -r '.lifetime_hours // "?"' <<<"$st")
+        field "Last Self-Test" "$s_t — $s_s (at $(group "$s_h") h)"
+    fi
+}
+
+# ============================================================== report top
+print_header() {
+    local total=$1 with_smart=$2
+    echo "SMART REPORT"
+    underline "SMART REPORT"
+    echo
+    printf '  Generated : %s\n' "$(date '+%a %b %d %H:%M:%S %Y %Z')"
+    printf '  Devices   : %d (%d SMART-capable, %d not)\n' "$total" "$with_smart" "$((total - with_smart))"
+}
+
+print_summary() {
+    section "SUMMARY"
+    printf '  %-12s  %-26s  %-6s  %-9s  %-7s  %-9s  %s\n' \
+        "DEVICE" "MODEL" "TYPE" "STATUS" "TEMP" "HOURS" "USED"
+    local row
+    for row in "${SUMMARY_ROWS[@]}"; do
+        printf '%s\n' "$row"
+    done
+}
+
+print_footer() {
+    echo
+    printf '─%.0s' {1..74}
+    echo
+    echo "Read-only report — no self-test was performed."
+    echo "To run a real test:  smartctl -t short|long <device>"
+}
+
+# ===================================================================== main
+main() {
+    while (( $# )); do
+        case $1 in
+            -d|--device) DEV_FILTER=$2; shift 2 ;;
+            --terminal)  FORCE_TERMINAL=1; shift ;;
+            --no-color)  NO_COLOR=1; shift ;;
+            -h|--help)   usage; exit 0 ;;
+            *)           die "unknown option: $1" ;;
+        esac
+    done
+
+    local c
+    for c in smartctl jq lsblk; do
+        command -v "$c" >/dev/null 2>&1 || die "missing dependency: $c"
+    done
+
+    # sudo availability
+    if (( EUID != 0 )) && ! sudo -n true 2>/dev/null; then
+        HAS_SUDO=0
+    fi
+
+    # output mode: the shell's report window when there is a display, plain terminal otherwise
+    if (( FORCE_TERMINAL )) || [[ -z ${DISPLAY:-}${WAYLAND_DISPLAY:-} ]]; then
+        OUT_MODE="terminal"
+    else
+        OUT_MODE="dialog"
+    fi
+
+    if [[ $OUT_MODE == dialog && $HAS_SUDO -eq 0 && $EUID -ne 0 ]]; then
+        SHOW_SUDO_HINT=1
+    fi
+
+    # colours: terminal + tty only
+    if [[ $OUT_MODE == terminal && $NO_COLOR -eq 0 && -t 1 ]]; then
+        c_grn=$'\e[32m'; c_red=$'\e[31m'; c_yel=$'\e[33m'; c_reset=$'\e[0m'
+    fi
+
+    # discover devices
+    local devices=()
+    declare -A DEV_MODEL=() DEV_TRAN=()
+    local d m t
+    while IFS=$'\t' read -r d m t; do
+        [[ -n $d ]] || continue
+        devices+=("$d"); DEV_MODEL[$d]=$m; DEV_TRAN[$d]=$t
+    done < <(list_disks "$DEV_FILTER")
+    (( ${#devices[@]} )) || die "no block devices found"
+
+    # build detail blocks, collecting summary rows along the way
+    DETAILS_TMP=$(mktemp) || die "cannot create temp file"
+    local total=${#devices[@]} with_smart=0
+    for d in "${devices[@]}"; do
+        local json dtype
+        json=$(fetch_smart "$d")
+        if [[ -z $json ]]; then
+            render_unsupported "$d" "${DEV_MODEL[$d]}" "${DEV_TRAN[$d]}" >> "$DETAILS_TMP"
+            continue
+        fi
+        dtype=$(jq -r '.device.type // ""' <<<"$json")
+        if [[ $dtype == nvme ]] && jq -e '.nvme_smart_health_information_log != null' >/dev/null 2>&1 <<<"$json"; then
+            with_smart=$((with_smart + 1))
+            render_nvme "$d" "$json" >> "$DETAILS_TMP"
+        elif [[ $dtype == ata || $dtype == sat ]] && jq -e '.ata_smart_attributes != null' >/dev/null 2>&1 <<<"$json"; then
+            with_smart=$((with_smart + 1))
+            render_ata "$d" "$json" >> "$DETAILS_TMP"
+        else
+            render_unsupported "$d" "${DEV_MODEL[$d]}" "${DEV_TRAN[$d]}" >> "$DETAILS_TMP"
+        fi
+    done
+
+    # output (header + summary + details + footer)
+    if [[ $OUT_MODE == dialog ]]; then
+        {
+            echo "TITLE: SMART Report"
+            print_header "$total" "$with_smart"
+            print_summary
+            cat "$DETAILS_TMP"
+            print_footer
+        } > "$REPORT"
+
+        if ! show_report smart "$REPORT"; then
+            # No shell window: print the report instead of dropping it.
+            cat "$REPORT"
+        fi
+    else
+        print_header "$total" "$with_smart"
+        print_summary
+        cat "$DETAILS_TMP"
+        print_footer
+    fi
+}
+
+main "$@"

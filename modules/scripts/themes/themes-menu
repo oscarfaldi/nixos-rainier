@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+
+# Themes menu for the Quickshell launcher.
+#
+# The shell renders the list; picking a row runs `theme-apply <name>`. Same protocol as the other
+# launchers/ menus: one "<label>|<command>" line per entry in $XDG_RUNTIME_DIR/qs-menu-themes.
+
+set -uo pipefail
+
+runtime="${XDG_RUNTIME_DIR:-/tmp}"
+qs_popup="${HOME}/System/.config/quickshell/scripts/qs-popup"
+menu="$runtime/qs-menu-themes"
+
+current="$(theme-current)"
+
+# Row labels are display names, not folder names: "Rolex", not "rolex". A theme can set
+# `display_name = "..."` in its colors.toml to override; otherwise every dash/underscore-separated
+# word is capitalised so a new theme is readable without editing anything.
+pretty_name() {
+    local raw="$1" file="$2" custom
+    custom=$(sed -n 's/^[[:space:]]*display_name[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$file" 2>/dev/null | head -1)
+    if [[ -n "$custom" ]]; then
+        printf '%s' "$custom"
+        return
+    fi
+    printf '%s' "$raw" | tr '_-' '  ' | awk '{for (i = 1; i <= NF; i++) {printf "%s%s", toupper(substr($i, 1, 1)), substr($i, 2); if (i < NF) printf " "}}'
+}
+
+: >"$menu"
+
+while read -r theme; do
+    [[ -n "$theme" ]] || continue
+
+    file=""
+    for root in "$HOME/.local/share/qs-palettes-user/$theme" "/etc/qs-palettes/$theme"; do
+        [[ -f "$root/colors.toml" ]] && { file="$root/colors.toml"; break; }
+    done
+
+    label="$(pretty_name "$theme" "$file")"
+    [[ "$theme" == "$current" ]] && label="$label  (active)"
+
+    printf '%s|theme-apply %s\n' "$label" "$theme" >>"$menu"
+done < <(theme-list)
+
+exec "$qs_popup" "menu themes"

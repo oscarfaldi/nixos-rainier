@@ -1,0 +1,620 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+# ============================================================
+# Remux to MP4
+#
+# Remux selected videos to MP4 without re-encoding.
+#
+# Video:
+#   Codec        : Copy
+#
+# Audio:
+#   Codec        : Copy
+#
+# Streams:
+#   First video stream and all audio streams are copied.
+#   Subtitle and data streams are not forced into MP4.
+#
+# Container:
+#   MP4
+#
+# Output:
+#   `<filename>-remuxed.mp4`
+#
+# Supports:
+#   - Single file
+#   - Multiple selected files
+#
+# Intended for Thunar Custom Actions using %F.
+# ============================================================
+
+notify() {
+    notify-send "$1" "$2"
+}
+
+is_video_file() {
+    case "${1,,}" in
+        *.mkv|*.mp4|*.m4v|*.mov|*.avi|*.wmv|*.asf|*.webm|*.mpg|*.mpeg|*.m2ts|*.mts|*.ts|*.mxf|*.flv|*.f4v|*.ogv|*.3gp|*.3g2|*.vob|*.divx)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+# ============================================================
+# Quickshell job reporting
+#
+# qs-job starts this script with QS_JOB_STATUS pointing at a key=value file that the shell's job
+# window polls to draw the progress bar. The file is replaced atomically, so a reader never sees
+# half a line. Without QS_JOB_STATUS (a plain terminal run) every call here is a no-op and the
+# script behaves exactly as before.
+# ============================================================
+
+JOB_TITLE="Remux to MP4"
+JOB_STATE="running"
+JOB_FILE=""
+JOB_DETAIL=""
+JOB_INDEX="0"
+JOB_TOTAL="1"
+JOB_PERCENT="0.0"
+JOB_SPEED="0.00"
+JOB_ETA="00:00:00"
+JOB_MESSAGE=""
+
+job_write() {
+    [[ -n "${QS_JOB_STATUS:-}" ]] || return 0
+
+    {
+        printf 'title=%s\n' "$JOB_TITLE"
+        printf 'state=%s\n' "$JOB_STATE"
+        printf 'file=%s\n' "$JOB_FILE"
+        printf 'detail=%s\n' "$JOB_DETAIL"
+        printf 'percent=%s\n' "$JOB_PERCENT"
+        printf 'speed=%s\n' "$JOB_SPEED"
+        printf 'eta=%s\n' "$JOB_ETA"
+        printf 'index=%s\n' "$JOB_INDEX"
+        printf 'total=%s\n' "$JOB_TOTAL"
+        printf 'message=%s\n' "$JOB_MESSAGE"
+    } >"$QS_JOB_STATUS.tmp" 2>/dev/null && mv -f "$QS_JOB_STATUS.tmp" "$QS_JOB_STATUS" 2>/dev/null || true
+
+    return 0
+}
+
+format_elapsed() {
+    local seconds="$1"
+
+    local hours=$((seconds / 3600))
+    local minutes=$(((seconds % 3600) / 60))
+    local secs=$((seconds % 60))
+
+    printf "%02d:%02d:%02d" "$hours" "$minutes" "$secs"
+}
+
+# ============================================================
+# Validate / Collect Files
+# ============================================================
+
+files=()
+
+if [[ "$#" -eq 0 ]]; then
+    notify \
+        "Remux to MP4" \
+        "No input file specified."
+
+    echo
+    echo "No input file specified."
+    echo
+    exit 1
+fi
+
+for input in "$@"; do
+
+    if [[ -f "$input" ]]; then
+
+        if is_video_file "$input"; then
+            files+=("$input")
+        else
+            notify \
+                "Remux to MP4" \
+                "$(basename "$input") is not a supported video file."
+
+            echo
+            echo "[SKIP] $(basename "$input") is not a supported video file."
+        fi
+
+    else
+
+        notify \
+            "Remux to MP4" \
+            "Invalid path: $(basename "$input")"
+
+        echo
+        echo "[SKIP] Invalid path: $input"
+
+    fi
+
+done
+
+total=${#files[@]}
+
+if [[ "$total" -eq 0 ]]; then
+    echo
+    echo "No supported videos found."
+    echo
+    JOB_TOTAL="0"
+    JOB_INDEX="0"
+    JOB_STATE="done"
+    JOB_PERCENT="100.0"
+    JOB_MESSAGE="no supported videos found"
+    job_write
+
+    notify \
+        "Remux to MP4" \
+        "No supported videos found."
+
+    exit 0
+fi
+
+# ============================================================
+# Session State
+# ============================================================
+
+current=0
+success=0
+failed=0
+skipped=0
+
+total_original=0
+total_final=0
+
+session_start=$(date +%s)
+
+tmp=""
+ffmpeg_log=""
+
+
+cleanup() {
+    echo
+    echo
+    echo "============================================================"
+    echo " CANCELLED"
+    echo "============================================================"
+    echo
+
+    if [[ -n "$tmp" && -f "$tmp" ]]; then
+        rm -f "$tmp"
+    fi
+
+    if [[ -n "$ffmpeg_log" && -f "$ffmpeg_log" ]]; then
+        rm -f "$ffmpeg_log"
+    fi
+
+    echo "Temporary output removed."
+    echo "Source files were not intentionally deleted."
+    echo
+
+    notify \
+        "Remux Cancelled" \
+        "The remux operation was interrupted."
+
+    JOB_STATE="cancelled"
+    JOB_MESSAGE="cancelled - temporary output removed"
+    job_write
+
+    exit 130
+}
+
+trap cleanup INT TERM
+
+# ============================================================
+# Header
+# ============================================================
+
+echo
+echo "============================================================"
+echo " REMUX TO MP4"
+echo "============================================================"
+echo "Files       : $total"
+echo "Video       : Copy"
+echo "Audio       : Copy"
+echo "Streams     : Video + Audio"
+echo "Container   : MP4"
+echo "Re-encode   : No"
+echo "Faststart   : Enabled"
+echo "============================================================"
+
+# ============================================================
+# Process Files
+# ============================================================
+
+for input in "${files[@]}"; do
+
+    current=$((current + 1))
+
+    filename="$(basename "$input")"
+
+    JOB_FILE="$filename"
+    JOB_DETAIL="[$current/$total]"
+    JOB_INDEX="$current"
+    JOB_TOTAL="$total"
+    JOB_STATE="running"
+    JOB_PERCENT="0.0"
+    JOB_SPEED="0.00"
+    JOB_ETA="00:00:00"
+    JOB_MESSAGE=""
+    job_write
+    extension_lower="${input##*.}"
+    extension_lower="${extension_lower,,}"
+
+    # Already in the requested container.
+    if [[ "$extension_lower" == "mp4" ]]; then
+        skipped=$((skipped + 1))
+
+        echo
+        echo "============================================================"
+        echo "[$current/$total] $filename"
+        echo "============================================================"
+        echo
+        echo "[SKIP] Already a MP4 file."
+        continue
+    fi
+
+    output="${input%.*}-remuxed.mp4"
+    tmp="${output}.remux-tmp.mp4"
+    ffmpeg_log="${tmp}.log"
+
+    # MP4 can only store text subtitles, as mov_text: those are converted so nothing is lost. A bitmap
+    # subtitle (PGS/VobSub) has no MP4 form at all, so it is reported in the log instead of silently
+    # disappearing - the source file still carries it.
+    sub_args=()
+    sub_codecs=()
+    sub_dropped=()
+    sub_out=0
+
+    while IFS= read -r sub_codec; do
+        [[ -n "$sub_codec" ]] && sub_codecs+=("$sub_codec")
+    done < <(ffprobe \
+        -v error \
+        -select_streams s \
+        -show_entries stream=codec_name \
+        -of default=noprint_wrappers=1:nokey=1 \
+        "$input" 2>/dev/null)
+
+    for sub_index in "${!sub_codecs[@]}"; do
+        case "${sub_codecs[$sub_index]}" in
+            subrip|ass|ssa|mov_text|webvtt|text)
+                sub_args+=(-map "0:s:$sub_index" -c:s:"$sub_out" mov_text)
+                sub_out=$((sub_out + 1))
+                ;;
+            *)
+                sub_dropped+=("${sub_codecs[$sub_index]}")
+                ;;
+        esac
+    done
+
+    if [[ "${#sub_dropped[@]}" -gt 0 ]]; then
+        echo "[SUBTITLE] dropped ${sub_dropped[*]} - MP4 cannot store bitmap subtitles"
+    fi
+
+
+    rm -f "$tmp" "$ffmpeg_log"
+
+    echo
+    echo "============================================================"
+    echo "[$current/$total] $filename"
+    echo "============================================================"
+    echo "Source : $input"
+    echo "Output : $output"
+    echo
+
+    original_size=$(stat -c%s "$input")
+    # Duration is only needed to draw a percentage in the progress window; the remux itself does
+    # not use it. Missing values just leave the bar at 0 and the ETA at --:--:--.
+    duration=$(ffprobe \
+        -v error \
+        -show_entries format=duration \
+        -of default=noprint_wrappers=1:nokey=1 \
+        "$input" 2>/dev/null || true)
+
+    remux_start=$(date +%s)
+
+    # A failing ffmpeg has to land in the [FAILED] branch below: with `set -e` and `pipefail` a
+    # non-zero pipeline aborts the whole script right here, before PIPESTATUS is read, so the
+    # source-preserving failure path never runs and the progress window stays on "WORKING" forever.
+    set +e
+
+    ffmpeg \
+        -hide_banner \
+        -loglevel warning \
+        -i "$input" \
+        -map 0:v:0 \
+        -map 0:a? \
+        -c:v copy \
+        -c:a copy \
+        "${sub_args[@]}" \
+        -movflags +faststart \
+\
+        -y \
+        -progress pipe:1 \
+        -nostats \
+        "$tmp" \
+        2>"$ffmpeg_log" |
+    while IFS="=" read -r key value; do
+
+        if [[ "$key" == "out_time_us" ]]; then
+            current_us="$value"
+
+            current_seconds=$((current_us / 1000000))
+            elapsed=$(( $(date +%s) - remux_start ))
+
+            if (( elapsed > 0 )); then
+                speed=$(awk \
+                    -v current="$current_seconds" \
+                    -v elapsed="$elapsed" \
+                    'BEGIN {
+                        printf "%.2f", current/elapsed
+                    }')
+            else
+                speed="0.00"
+            fi
+
+            JOB_PERCENT=$(awk \
+                -v current="$current_seconds" \
+                -v total="${duration:-0}" \
+                'BEGIN {
+                    if (total > 0) printf "%.1f", current / total * 100
+                    else printf "0.0"
+                }')
+            JOB_SPEED="$speed"
+            JOB_ETA=$(awk \
+                -v current="$current_seconds" \
+                -v total="${duration:-0}" \
+                -v speed="$speed" \
+                'BEGIN {
+                    if (speed > 0 && total > current) {
+                        left = (total - current) / speed
+                        printf "%02d:%02d:%02d", left / 3600, (left % 3600) / 60, left % 60
+                    } else {
+                        printf "--:--:--"
+                    }
+                }')
+            job_write
+
+            # A terminal gets the live line; the job log must stay readable.
+            if [[ -t 1 ]]; then
+                printf "\rProcessed: %s | Speed: %sx" \
+                    "$(format_elapsed "$current_seconds")" \
+                    "$speed"
+            fi
+        fi
+
+    done
+
+    ffmpeg_exit_code=${PIPESTATUS[0]}
+
+    set -e
+
+    echo
+
+    # ========================================================
+    # Success
+    # ========================================================
+
+    if [[ "$ffmpeg_exit_code" -eq 0 && -s "$tmp" ]]; then
+
+        touch -r "$input" "$tmp"
+
+        final_size=$(stat -c%s "$tmp")
+
+        total_original=$((total_original + original_size))
+        total_final=$((total_final + final_size))
+
+        remux_elapsed=$(( $(date +%s) - remux_start ))
+
+        size_difference=$((final_size - original_size))
+
+        mv -f "$tmp" "$output"
+        rm -f "$input"
+
+        echo
+        JOB_STATE="done"
+        JOB_PERCENT="100.0"
+        JOB_MESSAGE="$(numfmt --to=iec "$original_size") -> $(numfmt --to=iec "$final_size")"
+        job_write
+
+        echo "[OK] Remux complete!"
+        echo
+        echo "Source : $(numfmt --to=iec "$original_size")"
+        echo "Output : $(numfmt --to=iec "$final_size")"
+
+        if [[ "$size_difference" -lt 0 ]]; then
+
+            saved=$((-size_difference))
+
+            saved_percent=$(awk \
+                -v original="$original_size" \
+                -v final="$final_size" \
+                'BEGIN {
+                    printf "%.1f", (1-final/original)*100
+                }')
+
+            echo "Saved  : $(numfmt --to=iec "$saved") (-$saved_percent%)"
+
+        elif [[ "$size_difference" -gt 0 ]]; then
+
+            increase="$size_difference"
+
+            increase_percent=$(awk \
+                -v original="$original_size" \
+                -v final="$final_size" \
+                'BEGIN {
+                    printf "%.1f", (final/original-1)*100
+                }')
+
+            echo "Saved  : +$(numfmt --to=iec "$increase") (+$increase_percent%)"
+
+        else
+
+            echo "Saved  : 0 B (0.0%)"
+
+        fi
+
+        printf "Elapsed: %s\n" "$(format_elapsed "$remux_elapsed")"
+        echo "Output : $(basename "$output")"
+
+        # ffmpeg's own stderr goes to a file and used to be shown only on failure. A video can
+        # "succeed" and still lose a stream or a broken header, so surface the warnings in the job log.
+        if [[ -s "$ffmpeg_log" ]]; then
+            echo
+            echo "FFmpeg warnings:"
+            sed 's/^/  /' "$ffmpeg_log"
+        fi
+
+        success=$((success + 1))
+
+    # ========================================================
+    # Failure
+    # ========================================================
+
+    else
+
+        echo
+        JOB_STATE="failed"
+        JOB_MESSAGE="failed - source file preserved"
+        job_write
+
+        echo "[FAILED] Remux failed."
+        echo
+        echo "Source file preserved."
+        echo "Temporary output removed."
+
+        if [[ -s "$ffmpeg_log" ]]; then
+            echo
+            echo "FFmpeg output:"
+            echo "------------------------------------------------------------"
+
+            sed 's/^/  /' "$ffmpeg_log"
+
+            echo "------------------------------------------------------------"
+        else
+            echo
+            echo "FFmpeg did not provide additional error output."
+            echo "Exit code: $ffmpeg_exit_code"
+        fi
+
+        rm -f "$tmp"
+
+        failed=$((failed + 1))
+
+    fi
+
+    rm -f "$ffmpeg_log"
+
+    tmp=""
+    ffmpeg_log=""
+
+done
+
+# ============================================================
+# Summary
+# ============================================================
+
+session_end=$(date +%s)
+session_elapsed=$((session_end - session_start))
+
+echo
+echo
+echo "============================================================"
+echo " REMUX TO MP4 COMPLETE"
+echo "============================================================"
+echo "Processed     : $current/$total"
+echo "Successful    : $success"
+echo "Skipped       : $skipped"
+echo "Failed        : $failed"
+echo
+
+echo "Original size : $(numfmt --to=iec "$total_original")"
+echo "Final size    : $(numfmt --to=iec "$total_final")"
+
+if [[ "$total_original" -gt 0 ]]; then
+
+    total_difference=$((total_final - total_original))
+
+    if [[ "$total_difference" -lt 0 ]]; then
+
+        total_saved=$((-total_difference))
+
+        total_saved_percent=$(awk \
+            -v original="$total_original" \
+            -v final="$total_final" \
+            'BEGIN {
+                printf "%.1f", (1-final/original)*100
+            }')
+
+        echo "Space saved   : $(numfmt --to=iec "$total_saved") (-$total_saved_percent%)"
+
+    elif [[ "$total_difference" -gt 0 ]]; then
+
+        total_increase="$total_difference"
+
+        total_increase_percent=$(awk \
+            -v original="$total_original" \
+            -v final="$total_final" \
+            'BEGIN {
+                printf "%.1f", (final/original-1)*100
+            }')
+
+        echo "Saved         : +$(numfmt --to=iec "$total_increase") (+$total_increase_percent%)"
+
+    else
+
+        echo "Saved         : 0 B (0.0%)"
+
+    fi
+
+else
+
+    echo "Space change  : N/A"
+
+fi
+
+echo
+echo "Elapsed       : $(format_elapsed "$session_elapsed")"
+
+echo
+echo "============================================================"
+echo
+
+if (( failed > 0 )); then
+    notify \
+        "Remux to MP4 Finished" \
+        "$success successful, $failed failed, $skipped skipped."
+else
+    notify \
+        "Remux to MP4 Complete" \
+        "$success successful, $skipped skipped."
+fi
+
+# ============================================================
+# Terminal state for the progress window
+#
+# A run that processed nothing (input already in the target container, no matching file) never
+# reaches the per-file success/failure branches, so the window would poll forever. Always close the
+# job out with what the summary counted.
+# ============================================================
+
+JOB_PERCENT="100.0"
+
+if [[ "${failed:-0}" -gt 0 && "${success:-0}" -eq 0 ]]; then
+    JOB_STATE="failed"
+    JOB_MESSAGE="no file was processed"
+else
+    JOB_STATE="done"
+    JOB_MESSAGE="${success:-0} done, ${failed:-0} failed"
+fi
+
+job_write

@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+
+# ==============================================================================
+# Script Name: Copy Filename Without Extension
+# Description: Copies the filename excluding its extension to the clipboard.
+# ==============================================================================
+
+set -euo pipefail
+
+# Safety Check: Ensure a file was selected
+if [ $# -eq 0 ]; then
+    notify-send -i dialog-error "Clipboard Error" "No file selected."
+    exit 1
+fi
+
+# Extract and copy the filename without extension
+basename "${1%.*}" | wl-copy
+
+# Trigger notification
+notify-send -i edit-copy "Clipboard" "Filename copied without extension."

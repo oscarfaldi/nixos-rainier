@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+
+# ============================================================
+# Wallpaper Session
+#
+# Runs once at niri startup. The wallpaper is DRAWN BY THE SHELL
+# (main/wallpaper/Wallpaper.qml: one background-layer surface per output, reading
+# $XDG_STATE_HOME/theme/wallpaper), so this script no longer starts a daemon, applies an image, or
+# waits for outputs to appear. There is nothing left to race - which is the point: the old version
+# existed only to lose races against a wallpaper daemon and retry until it won.
+#
+# What is still needed is the fresh-install case. With an empty state dir there is no recorded image
+# and no palette, so the shell would sit on its fallback colours with no picture. In that case run
+# theme-apply once: it writes theme.json, the wallpaper path, the per-theme gallery and the lock
+# screen blur exactly like a theme switch does. On every normal login this exits immediately.
+# ============================================================
+
+set -uo pipefail
+
+state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/theme"
+mkdir -p "$state_dir"
+
+# A recorded path whose image no longer exists (theme renamed, gallery edited, file deleted) is the
+# same situation as an empty state: nothing to draw. Let theme-apply pick a valid background.
+recorded="$(cat "$state_dir/wallpaper" 2>/dev/null || true)"
+
+if [[ -s "$state_dir/theme.json" && -n "$recorded" && -f "$recorded" ]]; then
+    exit 0
+fi
+
+theme-apply "$(theme-current)" --no-rotate

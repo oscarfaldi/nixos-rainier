@@ -1,0 +1,175 @@
+#!/usr/bin/env bash
+
+# ==============================================================================
+# Rainier System Upgrade
+#
+# Description:
+#   Updates the flake inputs and rebuilds the Rainier NixOS configuration.
+#
+# Workflow:
+#   1. Save the currently active system profile.
+#   2. Update flake.lock (NixOS / Home Manager inputs).
+#   3. Rebuild and activate Rainier using the flake.
+#   4. Show the package diff between the old and new system generations.
+#
+# Notes:
+#   - This script intentionally does NOT use nix-channel.
+#   - This script intentionally does NOT modify Git history.
+#   - flake.lock is changed locally by `nix flake update`.
+#   - `git commit` / `git push` remain manual.
+# ==============================================================================
+
+set -euo pipefail
+
+# ------------------------------------------------------------------------------
+# Configuration
+# ------------------------------------------------------------------------------
+
+SYSTEM_DIR="$HOME/System"
+FLAKE="$SYSTEM_DIR#rainier"
+STATUS_CACHE="$HOME/.cache/update-status"
+
+# ------------------------------------------------------------------------------
+# UI Helpers
+# ------------------------------------------------------------------------------
+
+print_header() {
+    local title="$1"
+
+    echo
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo " $title"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo
+}
+
+# ------------------------------------------------------------------------------
+# Main
+# ------------------------------------------------------------------------------
+
+main() {
+    print_header "Rainier System Upgrade"
+
+    # --------------------------------------------------------------------------
+    # Validate repository
+    # --------------------------------------------------------------------------
+
+    if [[ ! -d "$SYSTEM_DIR" ]]; then
+        echo "✗ Rainier repository not found: $SYSTEM_DIR" >&2
+        exit 1
+    fi
+
+    if [[ ! -f "$SYSTEM_DIR/flake.nix" ]]; then
+        echo "✗ flake.nix not found in: $SYSTEM_DIR" >&2
+        exit 1
+    fi
+
+    # --------------------------------------------------------------------------
+    # Capture current generation
+    # --------------------------------------------------------------------------
+
+    local BEFORE_PROFILE
+
+    if [[ -L /run/current-system ]]; then
+        BEFORE_PROFILE="$(readlink -f /run/current-system)"
+    else
+        BEFORE_PROFILE="none"
+    fi
+
+    # --------------------------------------------------------------------------
+    # Update flake inputs
+    # --------------------------------------------------------------------------
+
+    print_header "Updating Flake Inputs"
+
+    echo "Updating NixOS and Home Manager inputs..."
+    echo
+
+    nix flake update --flake "$SYSTEM_DIR"
+
+    echo
+    echo "✓ flake.lock updated."
+    echo
+
+    # --------------------------------------------------------------------------
+    # Rebuild and activate Rainier
+    # --------------------------------------------------------------------------
+
+    print_header "Rebuilding Rainier"
+
+    echo "Building and activating the updated Rainier configuration..."
+    echo
+
+    sudo nixos-rebuild switch \
+        --flake "$FLAKE"
+
+    echo
+
+    # --------------------------------------------------------------------------
+    # Capture new generation
+    # --------------------------------------------------------------------------
+
+    local AFTER_PROFILE
+    AFTER_PROFILE="$(readlink -f /run/current-system)"
+
+    # Make sure the status directory exists before writing the result.
+    mkdir -p "$(dirname "$STATUS_CACHE")"
+
+    # --------------------------------------------------------------------------
+    # Verification
+    # --------------------------------------------------------------------------
+
+    print_header "Upgrade Result"
+
+    if [[ "$BEFORE_PROFILE" == "$AFTER_PROFILE" ]]; then
+        echo "ℹ System generation did not change."
+        echo "  The resulting configuration may already match the previous one."
+        echo
+        echo "Current profile:"
+        echo "  $AFTER_PROFILE"
+
+        printf '%s\n' "Current" > "$STATUS_CACHE"
+        return 0
+    fi
+
+    if [[ ! -d "$AFTER_PROFILE" || ! -f "$AFTER_PROFILE/init" ]]; then
+        echo "✗ Verification failed."
+        echo "  The new system profile is invalid or incomplete:"
+        echo "  $AFTER_PROFILE"
+
+        printf '%s\n' "Failed" > "$STATUS_CACHE"
+        return 1
+    fi
+
+    echo "✓ Rainier successfully upgraded."
+    echo
+    echo "Previous profile:"
+    echo "  $BEFORE_PROFILE"
+    echo
+    echo "Current profile:"
+    echo "  $AFTER_PROFILE"
+    echo
+    echo "Current NixOS version:"
+    echo "  $(nixos-version)"
+    echo
+
+    # --------------------------------------------------------------------------
+    # Package diff
+    # --------------------------------------------------------------------------
+
+    if command -v nvd >/dev/null 2>&1; then
+        print_header "Updated Packages"
+
+        nvd diff "$BEFORE_PROFILE" "$AFTER_PROFILE" || true
+    else
+        echo "• nvd is not installed; package diff skipped."
+        echo
+    fi
+
+    printf '%s\n' "Current" > "$STATUS_CACHE"
+
+    echo
+    echo "✓ Upgrade complete."
+}
+
+main "$@"

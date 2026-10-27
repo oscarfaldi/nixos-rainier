@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Dashboard
+Comment=Arrange the vertical monitor into the dashboard layout
+Exec=dashboard
+Terminal=false
+Icon=/home/oscarfaldi/System/assets/icons/desktop/dashboard.svg
+Categories=System;
+StartupNotify=false

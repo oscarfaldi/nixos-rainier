@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+
+# ==============================================================================
+# Script Name: Rotate Video Right (Overwrite)
+# Description: Rotates a video 90° clockwise by modifying metadata.
+#              No re-encoding/remuxing occurs. Overwrites the original file.
+# ==============================================================================
+
+set -euo pipefail
+
+# 0. Safety Check: Ensure a video file was selected
+if [ $# -eq 0 ]; then
+    notify-send -i dialog-error "Video Rotation" "No video selected."
+    exit 1
+fi
+
+FILE="$1"
+DIR="$(dirname "$FILE")"
+NAME="$(basename "$FILE")"
+
+# Create a temporary output file path
+TEMP_OUTPUT="${DIR}/${NAME%.*}_tmp.${NAME##*.}"
+
+# 1. Physically rotate video 90° counter-clockwise
+if ffmpeg \
+    -i "$FILE" \
+    -vf "transpose=1" \
+    -c:a copy \
+    "$TEMP_OUTPUT" \
+    -y >/dev/null 2>&1; then
+
+    mv "$TEMP_OUTPUT" "$FILE"
+
+    notify-send \
+        -i video-x-generic \
+        "Video Rotation" \
+        "Video rotated 90° counter-clockwise."
+
+else
+    rm -f "$TEMP_OUTPUT"
+
+    notify-send \
+        -i dialog-error \
+        "Video Rotation" \
+        "Rotation failed."
+fi

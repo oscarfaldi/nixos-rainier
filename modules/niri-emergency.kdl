@@ -1,0 +1,20 @@
+// Minimal config used only when the real one fails to validate.
+// Its only job is to keep a terminal reachable, so a broken config can never leave the session with
+// zero keybinds again. Started by niri-session-safe (see modules/scripts/systems).
+// A config reload needs no bind: niri reloads the file by itself when it changes.
+
+layout {
+    gaps 8
+}
+
+binds {
+    Mod+Return      { spawn "ghostty"; }
+    Mod+D           { spawn "ghostty"; }
+    Mod+B           { spawn "microsoft-edge"; }
+    Mod+Shift+E     { quit; }
+    Mod+Q           { close-window; }
+    Mod+Left        { focus-column-left; }
+    Mod+Right       { focus-column-right; }
+    Mod+Up          { focus-window-or-monitor-up; }
+    Mod+Down        { focus-window-or-monitor-down; }
+}

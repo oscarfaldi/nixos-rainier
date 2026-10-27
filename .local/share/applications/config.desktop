@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Config
+Exec=config-menu
+Terminal=false
+Icon=/home/oscarfaldi/System/assets/icons/desktop/config.svg

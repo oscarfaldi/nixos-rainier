@@ -1,0 +1,626 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+# ============================================================
+# Batch Re-encode and Compress to HEVC MKV
+#
+# Re-encode every video inside a selected folder to HEVC using
+# NVIDIA NVENC, with the goal of reducing file size.
+#
+# Video:
+#   Codec        : HEVC (H.265)
+#   Profile      : Main
+#   Preset       : P5
+#   Rate Control : Constant QP (24)
+#   Lookahead    : 20
+#   Spatial AQ   : ON
+#   AQ Strength  : 4
+#
+# Audio:
+#   Copy original stream
+#
+# Container:
+#   MKV
+#
+# Supports:
+#   - Single folder input
+#   - Non-recursive scan
+#
+# Intended for Thunar Custom Actions using %f.
+# ============================================================
+
+# ============================================================
+# Validate Input
+# ============================================================
+
+if [[ "$#" -ne 1 ]]; then
+    echo "Usage: batch-reencode-and-compress-to-hevc-mkv <folder>"
+    exit 1
+fi
+
+DIRECTORY="$1"
+
+if [[ ! -d "$DIRECTORY" ]]; then
+    echo "Invalid directory."
+    exit 1
+fi
+
+# ============================================================
+# Temporary Files / Cleanup
+# ============================================================
+
+tmp=""
+ffmpeg_log=""
+
+# ============================================================
+# Quickshell job reporting
+#
+# qs-job starts this script with QS_JOB_STATUS pointing at a key=value file that the shell's job
+# window polls to draw the progress bar. The file is replaced atomically, so a reader never sees
+# half a line. Without QS_JOB_STATUS (a plain terminal run) every call here is a no-op and the
+# script behaves exactly as before.
+# ============================================================
+
+JOB_TITLE="Batch re-encode to HEVC MKV"
+JOB_STATE="running"
+JOB_FILE=""
+JOB_DETAIL=""
+JOB_INDEX="0"
+JOB_TOTAL="1"
+JOB_PERCENT="0.0"
+JOB_SPEED="0.00"
+JOB_ETA="00:00:00"
+JOB_MESSAGE=""
+
+job_write() {
+    [[ -n "${QS_JOB_STATUS:-}" ]] || return 0
+
+    {
+        printf 'title=%s\n' "$JOB_TITLE"
+        printf 'state=%s\n' "$JOB_STATE"
+        printf 'file=%s\n' "$JOB_FILE"
+        printf 'detail=%s\n' "$JOB_DETAIL"
+        printf 'percent=%s\n' "$JOB_PERCENT"
+        printf 'speed=%s\n' "$JOB_SPEED"
+        printf 'eta=%s\n' "$JOB_ETA"
+        printf 'index=%s\n' "$JOB_INDEX"
+        printf 'total=%s\n' "$JOB_TOTAL"
+        printf 'message=%s\n' "$JOB_MESSAGE"
+    } >"$QS_JOB_STATUS.tmp" 2>/dev/null && mv -f "$QS_JOB_STATUS.tmp" "$QS_JOB_STATUS" 2>/dev/null || true
+
+    return 0
+}
+
+cleanup() {
+    echo
+    echo
+    echo "Interrupted."
+
+    [[ -n "$tmp" && -f "$tmp" ]] && rm -f "$tmp"
+    [[ -n "$ffmpeg_log" && -f "$ffmpeg_log" ]] && rm -f "$ffmpeg_log"
+
+    JOB_STATE="cancelled"
+    JOB_MESSAGE="cancelled - temporary output removed"
+    job_write
+
+    exit 130
+}
+
+trap cleanup INT TERM
+
+# ============================================================
+# Scan Files
+# ============================================================
+
+files=()
+
+while IFS= read -r -d '' file; do
+    files+=("$file")
+done < <(
+    find "$DIRECTORY" \
+        -maxdepth 1 \
+        -type f \
+        ! -iname '*nvenc-tmp*' \
+        \( \
+            -iname '*.mkv' \
+            -o -iname '*.mp4' \
+            -o -iname '*.m4v' \
+            -o -iname '*.mov' \
+            -o -iname '*.avi' \
+            -o -iname '*.wmv' \
+            -o -iname '*.asf' \
+            -o -iname '*.webm' \
+            -o -iname '*.mpg' \
+            -o -iname '*.mpeg' \
+            -o -iname '*.m2ts' \
+            -o -iname '*.mts' \
+            -o -iname '*.ts' \
+            -o -iname '*.mxf' \
+            -o -iname '*.flv' \
+            -o -iname '*.f4v' \
+            -o -iname '*.ogv' \
+            -o -iname '*.3gp' \
+            -o -iname '*.3g2' \
+            -o -iname '*.vob' \
+            -o -iname '*.divx' \
+        \) \
+        -print0
+)
+
+total=${#files[@]}
+current=0
+success=0
+failed=0
+total_original=0
+total_final=0
+batch_start=$(date +%s)
+
+# ============================================================
+# Header
+# ============================================================
+
+echo
+echo "============================================================"
+echo " BATCH RE-ENCODE AND COMPRESS TO HEVC MKV"
+echo "============================================================"
+echo "Directory : $DIRECTORY"
+echo "Found     : $total video files"
+echo "Codec     : HEVC"
+echo "Preset    : P5"
+echo "QP        : 24"
+echo "Audio     : Copy"
+echo "Container : MKV"
+echo "============================================================"
+
+if [[ "$total" -eq 0 ]]; then
+    echo
+    echo "No video files found."
+    echo
+
+    JOB_TOTAL="0"
+    JOB_INDEX="0"
+    JOB_STATE="done"
+    JOB_PERCENT="100.0"
+    JOB_MESSAGE="no video files found"
+    job_write
+
+    exit 0
+fi
+
+# ============================================================
+# Process Files
+# ============================================================
+
+for input in "${files[@]}"; do
+
+    current=$((current + 1))
+
+    filename="$(basename "$input")"
+
+    JOB_FILE="$filename"
+    JOB_DETAIL="[$current/$total]"
+    JOB_INDEX="$current"
+    JOB_TOTAL="$total"
+    JOB_STATE="running"
+    JOB_PERCENT="0.0"
+    JOB_SPEED="0.00"
+    JOB_ETA="00:00:00"
+    JOB_MESSAGE=""
+    job_write
+    extension="${input##*.}"
+    extension_lower="${extension,,}"
+
+    if [[ "$extension_lower" == "mkv" ]]; then
+        output="$input"
+    else
+        output="${input%.*}.mkv"
+    fi
+
+    # Subtitles have to survive the move to MKV. mov_text (the codec MP4 files carry) cannot be
+    # muxed into Matroska at all, so those streams are converted to SRT; every codec matroska
+    # takes natively (SRT, ASS, PGS, VobSub) is copied untouched. It is per stream because a
+    # bitmap subtitle has no text encoder, so one global -c:s cannot serve both kinds.
+    sub_args=()
+    sub_codecs=()
+
+    while IFS= read -r sub_codec; do
+        [[ -n "$sub_codec" ]] && sub_codecs+=("$sub_codec")
+    done < <(ffprobe \
+        -v error \
+        -select_streams s \
+        -show_entries stream=codec_name \
+        -of default=noprint_wrappers=1:nokey=1 \
+        "$input" 2>/dev/null)
+
+    if [[ "${#sub_codecs[@]}" -gt 0 ]]; then
+        sub_args+=(-map '0:s?')
+
+        for sub_index in "${!sub_codecs[@]}"; do
+            if [[ "${sub_codecs[$sub_index]}" == "mov_text" ]]; then
+                sub_args+=(-c:s:"$sub_index" srt)
+            else
+                sub_args+=(-c:s:"$sub_index" copy)
+            fi
+        done
+    fi
+
+    tmp="${output}.nvenc-tmp.mkv"
+    ffmpeg_log="${tmp}.log"
+
+    rm -f "$tmp" "$ffmpeg_log"
+
+    echo
+    echo "============================================================"
+    echo "[$current/$total] $filename"
+    echo "============================================================"
+
+    echo "Source : $input"
+    echo "Output : $output"
+    echo
+
+    duration=$(ffprobe \
+        -v error \
+        -show_entries format=duration \
+        -of default=noprint_wrappers=1:nokey=1 \
+        "$input") || duration=""
+
+    if [[ -z "$duration" ]]; then
+        JOB_STATE="failed"
+        JOB_MESSAGE="failed - source file preserved"
+        job_write
+
+        echo "[FAILED] Could not determine video duration."
+        echo "Source file preserved."
+
+        failed=$((failed + 1))
+        rm -f "$tmp" "$ffmpeg_log"
+
+        tmp=""
+        ffmpeg_log=""
+
+        continue
+    fi
+
+    original_size=$(stat -c%s "$input")
+    encode_start=$(date +%s)
+
+    # A failing encoder has to land in the [FAILED] branch below. With `set -e` and `pipefail` a
+    # non-zero pipeline aborts the whole script right here, before PIPESTATUS is read: the
+    # source-preserving failure path never ran, no summary was printed, and the progress window
+    # was left on "WORKING" forever. -e comes back as soon as the exit code is captured.
+    set +e
+
+    ffmpeg \
+        -hide_banner \
+        -loglevel warning \
+        -hwaccel_device 0 \
+        -hwaccel cuda \
+        -init_hw_device cuda=hw \
+        -filter_hw_device hw \
+        -hwaccel_output_format cuda \
+        -i "$input" \
+        -map 0:v:0 \
+        -map '0:a?' \
+        "${sub_args[@]}" \
+        -dn \
+        -c:v hevc_nvenc \
+        -gpu 0 \
+        -preset p5 \
+        -profile:v main \
+        -rc constqp \
+        -qp 24 \
+        -rc-lookahead 20 \
+        -spatial-aq 1 \
+        -aq-strength 4 \
+        -c:a copy \
+        -y \
+        -progress pipe:1 \
+        -nostats \
+        "$tmp" \
+        2>"$ffmpeg_log" |
+    while IFS= read -r line; do
+
+        if [[ "$line" == out_time_us=* ]]; then
+
+            current_us="${line#*=}"
+
+            current_seconds=$(awk \
+                "BEGIN {print $current_us / 1000000}")
+
+            percent=$(awk \
+                -v current="$current_seconds" \
+                -v total="$duration" \
+                'BEGIN {
+                    if (total > 0)
+                        printf "%.1f", (current / total) * 100
+                    else
+                        print "0.0"
+                }')
+
+            elapsed=$(($(date +%s) - encode_start))
+
+            speed=$(awk \
+                -v current="$current_seconds" \
+                -v elapsed="$elapsed" \
+                'BEGIN {
+                    if (elapsed > 0)
+                        printf "%.2f", current / elapsed
+                    else
+                        print "0.00"
+                }')
+
+            eta=$(awk \
+                -v current="$current_seconds" \
+                -v total="$duration" \
+                -v elapsed="$elapsed" \
+                'BEGIN {
+                    if (current > 0)
+                        printf "%.0f", (total-current)*elapsed/current
+                    else
+                        print 0
+                }')
+
+            eta_h=$((eta / 3600))
+            eta_m=$(((eta % 3600) / 60))
+            eta_s=$((eta % 60))
+
+            JOB_PERCENT="$percent"
+            JOB_SPEED="$speed"
+            JOB_ETA=$(printf '%02d:%02d:%02d' "$eta_h" "$eta_m" "$eta_s")
+            job_write
+
+            # A terminal gets the live line; the job log must stay readable, and the window already
+            # shows percent, speed and ETA in the bars.
+            if [[ -t 1 ]]; then
+                printf "\rProgress: %6s%% | Speed: %5sx | ETA: %02d:%02d:%02d" \
+                    "$percent" \
+                    "$speed" \
+                    "$eta_h" \
+                    "$eta_m" \
+                    "$eta_s"
+            fi
+        fi
+    done
+
+    ffmpeg_exit_code=${PIPESTATUS[0]}
+
+    set -e
+
+    echo
+
+    # ========================================================
+    # Success
+    # ========================================================
+
+    if [[ "$ffmpeg_exit_code" -eq 0 && -s "$tmp" ]]; then
+
+        touch -r "$input" "$tmp"
+
+        final_size=$(stat -c%s "$tmp")
+
+        total_original=$((total_original + original_size))
+        total_final=$((total_final + final_size))
+
+        size_difference=$((final_size - original_size))
+
+        if [[ "$original_size" -gt 0 ]]; then
+            percent_difference=$(awk \
+                -v original="$original_size" \
+                -v final="$final_size" \
+                'BEGIN {
+                    printf "%.1f", (final/original - 1) * 100
+                }')
+        else
+            percent_difference="0.0"
+        fi
+
+        encode_elapsed=$(($(date +%s) - encode_start))
+
+        encode_h=$((encode_elapsed / 3600))
+        encode_m=$(((encode_elapsed % 3600) / 60))
+        encode_s=$((encode_elapsed % 60))
+
+        if [[ "$extension_lower" == "mkv" ]]; then
+            mv -f "$tmp" "$input"
+        else
+            mv -f "$tmp" "$output"
+            rm -f "$input"
+        fi
+
+        echo
+        JOB_STATE="done"
+        JOB_PERCENT="100.0"
+        JOB_MESSAGE="$(numfmt --to=iec "$original_size") -> $(numfmt --to=iec "$final_size")"
+        job_write
+
+        echo "[OK] Re-encode and compression complete!"
+        echo
+        echo "Source : $(numfmt --to=iec "$original_size")"
+        echo "Output : $(numfmt --to=iec "$final_size")"
+
+        if [[ "$size_difference" -lt 0 ]]; then
+
+            saved=$((-size_difference))
+            saved_percent=$(awk \
+                -v original="$original_size" \
+                -v final="$final_size" \
+                'BEGIN {
+                    printf "%.1f", (1-final/original)*100
+                }')
+
+            echo "Saved  : $(numfmt --to=iec "$saved") (-$saved_percent%)"
+
+        elif [[ "$size_difference" -gt 0 ]]; then
+
+            increase=$size_difference
+            increase_percent=$(awk \
+                -v original="$original_size" \
+                -v final="$final_size" \
+                'BEGIN {
+                    printf "%.1f", (final/original-1)*100
+                }')
+
+            echo "Size increase: +$(numfmt --to=iec "$increase") (+$increase_percent%)"
+
+        else
+
+            echo "Size change: 0 B (0.0%)"
+
+        fi
+
+        printf "Elapsed: %02d:%02d:%02d\n" \
+            "$encode_h" \
+            "$encode_m" \
+            "$encode_s"
+
+        if [[ "$extension_lower" != "mkv" ]]; then
+            echo "New file: $(basename "$output")"
+        fi
+
+        # ffmpeg's own stderr goes to a file and used to be shown only on failure. A video can
+        # "succeed" and still lose a stream or a broken header, so surface the warnings in the job log.
+        if [[ -s "$ffmpeg_log" ]]; then
+            echo
+            echo "FFmpeg warnings:"
+            sed 's/^/  /' "$ffmpeg_log"
+        fi
+
+        success=$((success + 1))
+
+    # ========================================================
+    # Failure
+    # ========================================================
+
+    else
+
+        echo
+        JOB_STATE="failed"
+        JOB_MESSAGE="failed - source file preserved"
+        job_write
+
+        echo "[FAILED] Re-encode and compression failed."
+        echo
+        echo "Source file preserved."
+        echo "Temporary output removed."
+
+        if [[ -s "$ffmpeg_log" ]]; then
+            echo
+            echo "FFmpeg output:"
+            echo "------------------------------------------------------------"
+
+            sed 's/^/  /' "$ffmpeg_log"
+
+            echo "------------------------------------------------------------"
+        else
+            echo
+            echo "FFmpeg did not provide additional error output."
+            echo "Exit code: $ffmpeg_exit_code"
+        fi
+
+        rm -f "$tmp"
+        failed=$((failed + 1))
+    fi
+
+    rm -f "$ffmpeg_log"
+
+    tmp=""
+    ffmpeg_log=""
+
+done
+
+# ============================================================
+# Summary
+# ============================================================
+
+batch_end=$(date +%s)
+elapsed=$((batch_end - batch_start))
+
+echo
+echo
+echo "============================================================"
+echo " BATCH RE-ENCODE AND COMPRESS COMPLETE"
+echo "============================================================"
+echo "Processed     : $current/$total"
+echo "Successful    : $success"
+echo "Failed        : $failed"
+echo
+
+echo "Original size : $(numfmt --to=iec "$total_original")"
+echo "Final size    : $(numfmt --to=iec "$total_final")"
+
+if [[ "$total_original" -gt 0 ]]; then
+
+    total_difference=$((total_final - total_original))
+
+    if [[ "$total_difference" -lt 0 ]]; then
+
+        total_saved=$((-total_difference))
+
+        total_saved_percent=$(awk \
+            -v original="$total_original" \
+            -v final="$total_final" \
+            'BEGIN {
+                printf "%.1f", (1-final/original)*100
+            }')
+
+        echo "Space saved   : $(numfmt --to=iec "$total_saved") (-$total_saved_percent%)"
+
+    elif [[ "$total_difference" -gt 0 ]]; then
+
+        total_increase=$total_difference
+
+        total_increase_percent=$(awk \
+            -v original="$total_original" \
+            -v final="$total_final" \
+            'BEGIN {
+                printf "%.1f", (final/original-1)*100
+            }')
+
+        echo "Size increase : +$(numfmt --to=iec "$total_increase") (+$total_increase_percent%)"
+
+    else
+
+        echo "Size change   : 0 B (0.0%)"
+
+    fi
+
+else
+
+    echo "Space change  : N/A"
+
+fi
+
+elapsed_h=$((elapsed / 3600))
+elapsed_m=$(((elapsed % 3600) / 60))
+elapsed_s=$((elapsed % 60))
+
+echo
+printf "Elapsed       : %02d:%02d:%02d\n" \
+    "$elapsed_h" \
+    "$elapsed_m" \
+    "$elapsed_s"
+
+echo
+echo "============================================================"
+echo
+
+# ============================================================
+# Terminal state for the progress window
+#
+# A run that processed nothing (input already in the target container, no matching file) never
+# reaches the per-file success/failure branches, so the window would poll forever. Always close the
+# job out with what the summary counted.
+# ============================================================
+
+JOB_PERCENT="100.0"
+
+if [[ "${failed:-0}" -gt 0 && "${success:-0}" -eq 0 ]]; then
+    JOB_STATE="failed"
+    JOB_MESSAGE="no file was processed"
+else
+    JOB_STATE="done"
+    JOB_MESSAGE="${success:-0} done, ${failed:-0} failed"
+fi
+
+job_write

@@ -1,0 +1,137 @@
+[Default Applications]
+
+# =========================
+# Text
+# =========================
+text/plain=org.xfce.mousepad.desktop
+text/markdown=org.xfce.mousepad.desktop
+application/json=org.xfce.mousepad.desktop
+application/x-yaml=org.xfce.mousepad.desktop
+text/yaml=org.xfce.mousepad.desktop
+application/x-shellscript=org.xfce.mousepad.desktop
+text/x-python=org.xfce.mousepad.desktop
+
+# =========================
+# Web
+# =========================
+text/html=chromium.desktop
+application/xhtml+xml=chromium.desktop
+x-scheme-handler/http=chromium.desktop
+x-scheme-handler/https=chromium.desktop
+x-scheme-handler/about=chromium.desktop
+x-scheme-handler/unknown=chromium.desktop
+
+# =========================
+# Images
+# =========================
+image/jpeg=qimgv.desktop
+image/png=qimgv.desktop
+image/webp=qimgv.desktop
+image/gif=qimgv.desktop
+image/bmp=qimgv.desktop
+image/tiff=qimgv.desktop
+image/svg+xml=qimgv.desktop
+
+# Modern Image Formats
+image/avif=qimgv.desktop
+image/heif=qimgv.desktop
+image/heic=qimgv.desktop
+image/jxl=qimgv.desktop
+
+# Icons
+image/vnd.microsoft.icon=qimgv.desktop
+image/x-icon=qimgv.desktop
+
+# Photoshop & GIMP
+image/vnd.adobe.photoshop=qimgv.desktop
+image/x-xcf=qimgv.desktop
+
+# RAW Photos
+image/x-canon-cr2=qimgv.desktop
+image/x-canon-cr3=qimgv.desktop
+image/x-nikon-nef=qimgv.desktop
+image/x-sony-arw=qimgv.desktop
+image/x-panasonic-rw2=qimgv.desktop
+image/x-fuji-raf=qimgv.desktop
+image/x-olympus-orf=qimgv.desktop
+image/x-adobe-dng=qimgv.desktop
+
+# =========================
+# Video
+# =========================
+video/mp4=mpv.desktop
+video/x-matroska=mpv.desktop
+video/webm=mpv.desktop
+video/ogg=mpv.desktop
+video/x-msvideo=mpv.desktop
+video/avi=mpv.desktop
+video/x-ms-wmv=mpv.desktop
+video/quicktime=mpv.desktop
+video/mpeg=mpv.desktop
+video/mp2t=mpv.desktop
+video/MP2T=mpv.desktop
+video/x-m4v=mpv.desktop
+video/x-flv=mpv.desktop
+video/3gpp=mpv.desktop
+video/3gpp2=mpv.desktop
+
+# =========================
+# Audio
+# =========================
+audio/mpeg=mpv.desktop
+audio/flac=mpv.desktop
+audio/x-flac=mpv.desktop
+audio/ogg=mpv.desktop
+audio/opus=mpv.desktop
+audio/x-opus+ogg=mpv.desktop
+audio/webm=mpv.desktop
+audio/wav=mpv.desktop
+audio/x-wav=mpv.desktop
+audio/vnd.wave=mpv.desktop
+audio/mp4=mpv.desktop
+audio/aac=mpv.desktop
+audio/x-matroska=mpv.desktop
+
+# =========================
+# PDF
+# =========================
+application/pdf=atril.desktop
+
+# =========================
+# Microsoft Office (OnlyOffice)
+# =========================
+
+# Word
+application/msword=libreoffice-writer.desktop
+application/vnd.openxmlformats-officedocument.wordprocessingml.document=libreoffice-writer.desktop
+application/vnd.openxmlformats-officedocument.wordprocessingml.template=libreoffice-writer.desktop
+
+# Excel
+application/vnd.ms-excel=libreoffice-calc.desktop
+application/vnd.openxmlformats-officedocument.spreadsheetml.sheet=libreoffice-calc.desktop
+application/vnd.openxmlformats-officedocument.spreadsheetml.template=libreoffice-calc.desktop
+
+# PowerPoint
+application/vnd.ms-powerpoint=libreoffice-impress.desktop
+application/vnd.openxmlformats-officedocument.presentationml.presentation=libreoffice-impress.desktop
+application/vnd.openxmlformats-officedocument.presentationml.slideshow=libreoffice-impress.desktop
+application/vnd.openxmlformats-officedocument.presentationml.template=libreoffice-impress.desktop
+
+# OpenDocument
+application/vnd.oasis.opendocument.text=libreoffice-writer.desktop
+application/vnd.oasis.opendocument.spreadsheet=libreoffice-calc.desktop
+application/vnd.oasis.opendocument.presentation=libreoffice-impress.desktop
+
+# =========================
+# Archives
+# =========================
+application/zip=engrampa.desktop
+application/x-7z-compressed=engrampa.desktop
+application/x-rar=engrampa.desktop
+application/vnd.rar=engrampa.desktop
+application/x-tar=engrampa.desktop
+application/gzip=engrampa.desktop
+application/x-bzip2=engrampa.desktop
+application/x-xz=engrampa.desktop
+application/zstd=engrampa.desktop
+application/x-iso9660-image=engrampa.desktop

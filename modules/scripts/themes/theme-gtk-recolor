@@ -1,0 +1,185 @@
+#!/usr/bin/env python3
+
+# ============================================================
+# theme-gtk-recolor <theme-dir> <colors.toml>
+#
+# Rewrites every #rrggbb in a GTK theme's CSS so the theme follows a palette. Two rules:
+#
+#   neutral colours (saturation < 0.18)  -> remapped along the palette's own dark->light ramp by
+#                                           LUMINANCE, interpolating between the two neighbouring
+#                                           ramp stops. A table-based approach cannot survive a theme
+#                                           with ~100 grey shades: the ones left out stay grey (that
+#                                           is exactly how Thunar's sidebar stayed Nordic).
+#   coloured ones                        -> mapped to the palette colour with the NEAREST HUE (red,
+#                                           orange, yellow, green, cyan, blue, magenta), keeping the
+#                                           downloaded theme's own saturation/lightness balance.
+#
+# Anything it does not understand is left untouched, so a miss is one wrong shade - never a broken
+# theme, and never a crash.
+# ============================================================
+
+import colorsys
+import glob
+import os
+import re
+import sys
+
+HEX = re.compile(r"#([0-9a-fA-F]{6})\b")
+RGB_FN = re.compile(r"rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*(?:,\s*([0-9.]+)\s*)?\)")
+
+RAMP_ROLES = [
+    "darker_background",
+    "dark_background",
+    "background",
+    "lighter_background",
+    "selection",
+    "muted",
+    "dark_foreground",
+    "light_foreground",
+    "bright_foreground",
+]
+
+ACCENT_ROLES = ["red", "orange", "yellow", "green", "cyan", "blue", "magenta"]
+
+
+def parse_palette(path):
+    values = {}
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            m = re.match(r'\s*([a-z_]+)\s*=\s*"#([0-9a-fA-F]{6})"', line)
+            if m:
+                values[m.group(1)] = m.group(2).lower()
+    return values
+
+
+def to_rgb(h):
+    h = h.lstrip("#")
+    return tuple(int(h[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
+
+
+def to_hex(rgb):
+    return "#" + "".join("%02x" % max(0, min(255, round(c * 255))) for c in rgb)
+
+
+def lum(h):
+    r, g, b = to_rgb(h)
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def hsl(h):
+    r, g, b = to_rgb(h)
+    return colorsys.rgb_to_hls(r, g, b)  # (hue, lightness, saturation)
+
+
+def blend(a, b, t):
+    ra, rb = to_rgb(a), to_rgb(b)
+    return to_hex(tuple(ra[i] + (rb[i] - ra[i]) * t for i in range(3)))
+
+
+def hue_dist(a, b):
+    d = abs(a - b) % 1.0
+    return min(d, 1.0 - d)
+
+
+def main():
+    if len(sys.argv) != 3:
+        print("usage: theme-gtk-recolor <theme-dir> <colors.toml>", file=sys.stderr)
+        return 2
+
+    theme_dir, palette_path = sys.argv[1], sys.argv[2]
+    palette = parse_palette(palette_path)
+    if "background" not in palette or "foreground" not in palette:
+        print("theme-gtk-recolor: palette has no background/foreground", file=sys.stderr)
+        return 1
+
+    ramp = [(lum(palette[r]), palette[r]) for r in RAMP_ROLES if r in palette]
+    if len(ramp) < 2:
+        ramp = [(lum(palette["background"]), palette["background"]),
+                (lum(palette["foreground"]), palette["foreground"])]
+    ramp.sort()
+
+    accents = []
+    for role in ACCENT_ROLES:
+        if role in palette:
+            h, _, s = hsl(palette[role])
+            accents.append((h, s, palette[role]))
+
+    # Optional: every cool accent (teal/blue/mint) collapses into this colour instead. A warm palette
+    # like gruvbox owns a teal "blue", and having that teal show up as the selected-row/focus colour on
+    # an otherwise brown desktop is the single thing that read as "minty" and out of place.
+    warm_accent = palette.get("gtk_accent")
+
+    cache = {}
+
+    def remap_hex(src):
+        src = src.lower()
+        if src in cache:
+            return cache[src]
+
+        h, l, s = hsl(src)
+
+        # Neutral test. Saturation alone is not enough: Nordic's TEXT colour (#d8dee9) carries a
+        # faint blue tint (s=0.25) and was therefore treated as an accent and mapped to the palette's
+        # blue - which is why gruvbox ended up with pale teal text on warm brown surfaces. Anything
+        # at the extremes of lightness is a highlight or a shadow, never an accent, so those go down
+        # the neutral ramp regardless of their saturation.
+        if s < 0.18 or l > 0.80 or l < 0.10:
+            target_l = lum(src)
+            below = ramp[0]
+            above = ramp[-1]
+            for i in range(len(ramp) - 1):
+                if ramp[i][0] <= target_l <= ramp[i + 1][0]:
+                    below, above = ramp[i], ramp[i + 1]
+                    break
+            span = above[0] - below[0]
+            t = 0 if span <= 0 else (target_l - below[0]) / span
+            out = blend(below[1], above[1], t)
+        elif accents:
+            best = min(accents, key=lambda a: hue_dist(a[0], h))
+            target_h, target_s, target_hex = best
+            if warm_accent and 150.0 <= target_h * 360.0 <= 280.0:
+                # hsl() returns (hue, lightness, saturation) - keep the accent's own hex too
+                target_h, _warm_l, target_s = hsl(warm_accent)
+                target_hex = warm_accent
+            # keep the base theme's lightness, borrow the palette's hue and saturation
+            tr, tg, tb = to_rgb(target_hex)
+            out = to_hex(colorsys.hls_to_rgb(target_h, l, min(1.0, max(s, target_s * 0.85))))
+        else:
+            out = src
+
+        cache[src] = out
+        return out
+
+    def remap(match):
+        return remap_hex("#" + match.group(1))
+
+    def remap_rgb_fn(match):
+        rgb = "#%02x%02x%02x" % (min(255, int(match.group(1))),
+                                 min(255, int(match.group(2))),
+                                 min(255, int(match.group(3))))
+        out = remap_hex(rgb)
+        parts = [str(int(out[1:3], 16)), str(int(out[3:5], 16)), str(int(out[5:7], 16))]
+        if match.group(4) is not None:
+            return "rgba(%s, %s)" % (", ".join(parts), match.group(4))
+        return "rgb(%s)" % ", ".join(parts)
+
+    files = []
+    for pattern in ("gtk-3.0/*.css", "gtk-3.20/*.css", "gtk-4.0/*.css"):
+        files.extend(glob.glob(os.path.join(theme_dir, pattern)))
+
+    touched = 0
+    for path in files:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+        new_text = RGB_FN.sub(remap_rgb_fn, HEX.sub(remap, text))
+        if new_text != text:
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(new_text)
+            touched += 1
+
+    print("theme-gtk-recolor: %d css file(s), %d colour(s) mapped" % (touched, len(cache)))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

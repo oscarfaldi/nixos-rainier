@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+ARCHIVE_ROOT="/mnt/nas/archive/Archive"
+ARCHIVE_NAME="Archive-$(date +%F)"
+DEST="${ARCHIVE_ROOT}/${ARCHIVE_NAME}"
+
+SOURCES=(
+    "$HOME/Downloads"
+    "$HOME/Documents"
+    "$HOME/Pictures"
+    "$HOME/Music"
+    "$HOME/Videos"
+)
+
+# ------------------------------------------------------------------------------
+# Validate NAS
+# ------------------------------------------------------------------------------
+
+if [ ! -d "$ARCHIVE_ROOT" ]; then
+    notify-send \
+        -i dialog-error \
+        "Archive Home Folder" \
+        "NAS archive path is unavailable."
+
+    exit 1
+fi
+
+mkdir -p "$DEST"
+
+SUCCESS_COUNT=0
+
+# ------------------------------------------------------------------------------
+# Archive
+# ------------------------------------------------------------------------------
+
+for SOURCE in "${SOURCES[@]}"; do
+
+    NAME="$(basename "$SOURCE")"
+
+    if [ ! -d "$SOURCE" ]; then
+        continue
+    fi
+
+    mkdir -p "${DEST}/${NAME}"
+
+    rsync \
+        -a \
+        --remove-source-files \
+        "$SOURCE/" \
+        "${DEST}/${NAME}/"
+
+    SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+
+done
+
+# ------------------------------------------------------------------------------
+# Cleanup empty directories
+# ------------------------------------------------------------------------------
+
+for SOURCE in "${SOURCES[@]}"; do
+
+    if [ -d "$SOURCE" ]; then
+
+        find "$SOURCE" \
+            -mindepth 1 \
+            -type d \
+            -empty \
+            -delete
+
+    fi
+
+done
+
+# ------------------------------------------------------------------------------
+# Notification
+# ------------------------------------------------------------------------------
+
+notify-send \
+    -i folder-remote \
+    "Archive Complete" \
+    "Archived to ${ARCHIVE_NAME}"

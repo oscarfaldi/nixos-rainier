@@ -1,0 +1,39 @@
+#!/bin/sh
+# Start the Quickshell lock screen.
+#
+#   qs-lock          lock every output (session lock)
+#   qs-lock --test   render the same screen as a normal surface, without locking (for design review)
+#
+# The lock client is a separate Quickshell instance on purpose: a crash in the lock UI cannot take the
+# bar or the popups with it, and killing this process releases the session lock.
+set -eu
+
+config="${HOME}/System/.config/quickshell/lock"
+
+# A live instance means the session is already locked, and there is nothing to do. Killing a running
+# instance would RELEASE the session lock for a moment - exactly what must never happen on suspend.
+# The client quits itself when the password is accepted, so an unlocked session leaves no process
+# behind; that is what makes this check trustworthy.
+if pgrep -f "quickshell -p $config" >/dev/null 2>&1; then
+    exit 0
+fi
+
+if [ "${1:-}" = "--test" ]; then
+    QS_LOCK_TEST=1 setsid -f quickshell -p "$config" >/dev/null 2>&1
+else
+    setsid -f quickshell -p "$config" >/dev/null 2>&1
+fi
+
+# Confirm the client actually came up. Without this a failed start (broken QML, no session-lock
+# support) would leave the machine unlocked after resume, silently. One retry, then a non-zero exit so
+# the failure lands in the journal next to swayidle's before-sleep hook.
+sleep 1
+if ! pgrep -f "quickshell -p $config" >/dev/null 2>&1; then
+    echo "qs-lock: the lock client did not start, retrying" >&2
+    setsid -f quickshell -p "$config" >/dev/null 2>&1
+    sleep 1
+    if ! pgrep -f "quickshell -p $config" >/dev/null 2>&1; then
+        echo "qs-lock: the lock client failed to start twice - the session is NOT locked" >&2
+        exit 1
+    fi
+fi
