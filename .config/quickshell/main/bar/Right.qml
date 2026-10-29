@@ -26,6 +26,32 @@ Item {
     // screenshot (target ~22px of visible space between groups).
     spacing: 0
 
+    // External tray icons (anything that is not part of this shell) live in their own
+    // compartment at the LEFT edge of the right cluster, behind a "|" separator. The cluster
+    // is anchored to the right edge, so a tray item appearing widens the row outwards: the
+    // shell's own icons keep their calibrated ink gaps and never shift. The separator is bound
+    // to the tray's own visibility, because an empty tray has to collapse completely instead of
+    // leaving a floating bar behind.
+    Tray {
+      id: trayZone
+
+      Layout.alignment: Qt.AlignVCenter
+    }
+
+    Text {
+      visible: trayZone.hasItems
+      Layout.alignment: Qt.AlignVCenter
+      Layout.leftMargin: 10
+      Layout.rightMargin: 12
+
+      text: "|"
+      color: rightGroup.theme.fg
+
+      font.family: rightGroup.theme.fontFamily
+      font.pixelSize: rightGroup.theme.fontSize
+      font.weight: Font.Bold
+    }
+
     // cpu + memory: their internal 20px spacing is owner-approved, keep it
     SystemStats { Layout.alignment: Qt.AlignVCenter }
     // ink gap to memory measured 23px -> approved as-is, keep margin 20
@@ -40,9 +66,6 @@ Item {
       Layout.alignment: Qt.AlignVCenter
       Layout.leftMargin: 16
     }
-    // the tray collapses to zero width when nothing is left to show; when it
-    // is visible it takes the same optical margin as its neighbours
-    Tray        { Layout.alignment: Qt.AlignVCenter; Layout.leftMargin: 16 }
     // power management panel: immediately LEFT of the power menu launcher, because the
     // two are the same family of "system" actions (and both panels open flush right,
     // under this end of the bar). Measured ink gaps with this margin: audio -> this 22,

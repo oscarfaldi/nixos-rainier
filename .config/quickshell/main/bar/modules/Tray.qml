@@ -4,6 +4,8 @@ import QtQuick.Layouts
 import "../../theme"
 
 Item {
+  id: root
+
   readonly property Theme theme: Theme {}
 
   // Collapses to zero width when the tray is empty (RowLayout skips
@@ -48,14 +50,40 @@ Item {
         width: 18
         height: 18
 
+        // Quickshell hands themed icons over as "image://icon/<name>". A StatusNotifierItem
+        // that publishes an absolute file path instead (LocalSend does) becomes
+        // "image://icon//nix/store/..." and the icon provider cannot resolve it, so the
+        // delegate used to render as an empty 18px slot. Hand file paths to Qt as file URLs.
+        readonly property string iconSource: {
+          const raw = String(modelData.icon || "")
+          if (raw.indexOf("image://icon//") === 0)
+            return "file://" + raw.slice("image://icon/".length)
+          return raw
+        }
+
         Image {
+          id: iconImage
+
           anchors.centerIn: parent
           width: 16
           height: 16
-          source: modelData.icon
+          source: parent.iconSource
           sourceSize.width: 16
           sourceSize.height: 16
           fillMode: Image.PreserveAspectFit
+          visible: parent.iconSource !== "" && status !== Image.Error
+        }
+
+        // Last resort for items with no usable icon: a dot keeps the slot visible and
+        // clickable instead of reading as a hole in the bar.
+        Rectangle {
+          visible: !iconImage.visible
+
+          anchors.centerIn: parent
+          width: 5
+          height: 5
+          radius: 2.5
+          color: root.theme.muted
         }
 
         MouseArea {
