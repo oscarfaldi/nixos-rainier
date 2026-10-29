@@ -62,12 +62,6 @@ in
     })
 
     (mkPWA {
-      name = "WhatsApp";
-      url = "https://web.whatsapp.com";
-      icon = "${config.my.repoPath}/assets/icons/pwa/whatsapp.svg";
-    })
-
-    (mkPWA {
       name = "Wordpress";
       url = "https://oscarfaldi.com/wp-admin";
       icon = "${config.my.repoPath}/assets/icons/pwa/wordpress.svg";

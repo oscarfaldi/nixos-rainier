@@ -9,8 +9,9 @@ Each entry in SCREENS is one workspace: a row of columns, where every column
 has a width ratio and one or more windows stacked vertically with height
 ratios. A vertical split (A on top, B below) is ONE column with two windows.
 
-Why a script instead of plain window-rules: every app here is a Microsoft Edge
-PWA window, and Edge builds its Wayland app-id from the URL host plus path.
+Why a script instead of plain window-rules: almost every app here is a
+Microsoft Edge PWA window, and Edge builds its Wayland app-id from the URL host
+plus path.
 Jellyfin, Navidrome, Unraid and qBittorrent all serve from the bare host
 10.10.10.10, so all four report the same app-id ("msedge-10.10.10.10__-Default")
 and no window-rule can tell them apart. This script tracks real window ids
@@ -50,11 +51,11 @@ MON_VERTICAL = "DP-1"  # left monitor, 1440x2560, rotated 90
 # height = share of the workspace height for that window in a stacked column
 SCREENS = [
     {
-        # screen 1: WhatsApp, full height
+        # screen 1: ZapZap, full height
         "output": MON_VERTICAL,
         "workspace": 1,
         "columns": [
-            {"width": 1.00, "windows": [("whatsapp", 1.00)]},
+            {"width": 1.00, "windows": [("zapzap", 1.00)]},
         ],
     },
     {
@@ -94,7 +95,9 @@ SCREENS = [
 # Launch command per app: the same Exec= line the .desktop launchers use, so
 # the apps come up exactly as they do from the app launcher.
 APPS = {
-    "whatsapp": ["microsoft-edge", "--app=https://web.whatsapp.com"],
+    # ZapZap is a real toplevel with its own app-id, not a PWA. It launches and is
+    # placed exactly like the others, so screen 1 keeps a single owner.
+    "zapzap": ["zapzap"],
     "jellyfin": ["microsoft-edge", "--app=http://movies.local:8096/"],
     "navidrome": ["microsoft-edge", "--app=http://music.local:4533/"],
     "hermes": ["microsoft-edge", "--app=http://hermes.local:9119/"],
