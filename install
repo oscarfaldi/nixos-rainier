@@ -62,6 +62,11 @@ cd "$CONFIG_DIR"
 
 SMB_CRED_FILE="/etc/smb-credentials"
 
+# smbclient looks for Samba's server config at /etc/samba/smb.conf, which NixOS does not
+# create unless the Samba server is enabled. `-s /dev/null` makes the empty config explicit:
+# it silences the "Can't load /etc/samba/smb.conf" warning while keeping the same compiled
+# defaults that smbclient already falls back to, so transfers behave identically.
+
 # NAS SMB share used ONLY for direct bootstrap access.
 # No filesystem mount is created.
 SMB_BOOTSTRAP_SHARE="//10.10.10.10/toolkit"
@@ -322,7 +327,7 @@ SSH identity restore skipped."
     chmod 600 "$TEMP_CRED"
 
     if ! nix-shell -p samba --run "
-        smbclient \
+        smbclient -s /dev/null \
             \"$SMB_BOOTSTRAP_SHARE\" \
             -A \"$TEMP_CRED\" \
             -c '
@@ -536,7 +541,7 @@ Syncthing identity restore skipped."
     chmod 600 "$TEMP_CRED"
 
     if ! nix-shell -p samba --run "
-        smbclient \
+        smbclient -s /dev/null \
             \"$SMB_BOOTSTRAP_SHARE\" \
             -A \"$TEMP_CRED\" \
             -c '
@@ -691,7 +696,7 @@ ZapZap session restore skipped."
     chmod 600 "$TEMP_CRED"
 
     if ! nix-shell -p samba --run "
-        smbclient \
+        smbclient -s /dev/null \
             \"$SMB_BOOTSTRAP_SHARE\" \
             -A \"$TEMP_CRED\" \
             -c '
