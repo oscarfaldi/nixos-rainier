@@ -429,6 +429,7 @@ Installation will continue normally."
            && [[ -s "$TEMP_DIR/id_ed25519_github" ]]; then
             install -m 0600 "$TEMP_DIR/id_ed25519_github" "$SSH_CONFIG_DIR/id_ed25519_github"
             ssh -i "$SSH_PRIVATE_KEY" -o IdentitiesOnly=yes -o BatchMode=yes \
+                -o StrictHostKeyChecking=accept-new \
                 -o ConnectTimeout=10 root@10.10.10.10 \
                 'cat /mnt/user/toolkit/SSH/id_ed25519_github.pub' \
                 > "$SSH_CONFIG_DIR/id_ed25519_github.pub" 2>/dev/null || true
@@ -462,6 +463,64 @@ git push will need manual setup. Installation continues normally."
     echo "  Private key → $SSH_PRIVATE_KEY"
     echo "  Public key  → $SSH_PUBLIC_KEY"
     echo
+}
+
+# ------------------------------------------------------------------------------
+# GitHub Host Key
+# ------------------------------------------------------------------------------
+
+# A reinstall wipes known_hosts, and the first `git push` then dies on host key
+# verification. Pin github.com here instead of asking the owner to do it: the key is
+# taken from api.github.com over HTTPS and cross-checked against ssh-keyscan, so it is
+# never accepted purely on trust-on-first-use. Non-fatal on purpose.
+seed_github_host_key() {
+    print_header "GitHub Host Key"
+
+    local known_hosts="$SSH_CONFIG_DIR/known_hosts"
+
+    if [[ -f "$known_hosts" ]] && ssh-keygen -F github.com -f "$known_hosts" >/dev/null 2>&1; then
+        echo "✓ github.com already trusted."
+        return 0
+    fi
+
+    if ! command -v curl >/dev/null 2>&1 || ! command -v ssh-keyscan >/dev/null 2>&1; then
+        print_warning \
+            "curl or ssh-keyscan is unavailable. \
+The GitHub host key was not pinned; git push may need it added manually."
+        return 0
+    fi
+
+    local api_key scanned_key
+    api_key="$(curl -fsS --max-time 20 https://api.github.com/meta 2>/dev/null \
+        | grep -o 'ssh-ed25519 [A-Za-z0-9+/=]*' | head -1 || true)"
+    scanned_key="$(ssh-keyscan -t ed25519 github.com 2>/dev/null \
+        | grep -v '^#' | awk '{print $2" "$3}' | head -1 || true)"
+
+    if [[ -z "$api_key" ]]; then
+        print_warning \
+            "Could not read the GitHub host key from api.github.com. \
+git push may need it added manually."
+        return 0
+    fi
+
+    # When the scan succeeds it has to agree with the HTTPS result. A mismatch means
+    # something is intercepting the SSH connection, so nothing gets pinned.
+    if [[ -n "$scanned_key" && "$scanned_key" != "$api_key" ]]; then
+        print_warning \
+            "ssh-keyscan and api.github.com disagree about the GitHub host key. \
+Nothing was pinned."
+        return 0
+    fi
+
+    if ! mkdir -p "$SSH_CONFIG_DIR"; then
+        print_warning "Could not create ~/.ssh. GitHub host key not pinned."
+        return 0
+    fi
+    chmod 700 "$SSH_CONFIG_DIR"
+
+    echo "github.com $api_key" >> "$known_hosts"
+    chmod 600 "$known_hosts"
+    echo "✓ github.com host key pinned."
 }
 
 # ------------------------------------------------------------------------------
@@ -827,6 +886,7 @@ main() {
     prepare_hardware_for_flake
     setup_smb_credentials
     bootstrap_ssh_identity
+    seed_github_host_key
     bootstrap_syncthing_identity
     bootstrap_zapzap_session
     report_pinned_revision
