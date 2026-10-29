@@ -13,6 +13,7 @@
     ./starship.nix
     ./ssh.nix
     ./git.nix
+    ./zapzap.nix
   ];
 
   home.username = osConfig.my.username;
