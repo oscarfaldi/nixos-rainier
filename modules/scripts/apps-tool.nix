@@ -10,7 +10,7 @@ in
 {
 
   # ============================================================
-  # Environment Scripts (Steam & Games)
+  # Application Scripts
   # ============================================================
 
   environment.systemPackages = [
@@ -18,5 +18,6 @@ in
     (mkScript "davinci")
     (mkScript "btop-launch")
     (mkScript "yazi-launch")
+    (mkScript "zapzap-backup")
   ];
 }

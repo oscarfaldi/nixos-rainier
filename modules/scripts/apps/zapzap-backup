@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+
+# Snapshot the ZapZap web profile to the NAS toolkit share.
+#
+# The profile is NOT a preferences file: ~/.local/share/ZapZap holds the
+# WhatsApp linked-device credentials. Copying it while ZapZap runs can corrupt
+# the SQLite database and the Chromium profile, so the app has to be closed.
+# install restores this archive only when nothing is on disk yet, which is what
+# removes the QR scan from a fresh NixOS install.
+#
+# Treated like the SSH identity: the share is the trust boundary, and the file
+# is written with 0600.
+
+set -euo pipefail
+
+DATA="$HOME/.local/share/ZapZap"
+DEST="/mnt/nas/toolkit/ZapZap"
+TAR="zapzap-session.tar.gz"
+
+if pgrep -f '[.]zapzap-wrapped' >/dev/null; then
+    echo "Close ZapZap first: the web profile must not be copied while it is open." >&2
+    exit 1
+fi
+
+if [[ ! -d "$DATA" ]]; then
+    echo "No ZapZap data at $DATA" >&2
+    exit 1
+fi
+
+if [[ ! -d /mnt/nas/toolkit ]]; then
+    echo "The NAS toolkit share is not mounted at /mnt/nas/toolkit" >&2
+    exit 1
+fi
+
+STAGE="$(mktemp -d)"
+trap 'rm -rf "$STAGE"' EXIT
+
+tar -C "$HOME/.local/share" -czf "$STAGE/$TAR" ZapZap
+( cd "$STAGE" && sha256sum "$TAR" > "$TAR.sha256" )
+
+mkdir -p "$DEST"
+install -m 0600 "$STAGE/$TAR" "$DEST/$TAR"
+install -m 0600 "$STAGE/$TAR.sha256" "$DEST/$TAR.sha256"
+
+# Record which build produced the profile; a major jump is the one case where
+# the restored session may be unreadable and a new QR scan is required.
+readlink -f "$(command -v zapzap)" > "$DEST/version.txt" 2>/dev/null || true
+
+echo "Wrote $DEST/$TAR ($(du -h "$STAGE/$TAR" | cut -f1))"

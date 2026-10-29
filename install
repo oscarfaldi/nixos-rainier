@@ -68,6 +68,13 @@ SMB_BOOTSTRAP_SHARE="//10.10.10.10/toolkit"
 SYNCTHING_REMOTE_DIR="Syncthing"
 SSH_REMOTE_DIR="SSH"
 
+# Local ZapZap profile. Holds the WhatsApp linked-device credentials, so it is
+# restored only when nothing is on disk yet: a restore must never overwrite a
+# newer link.
+ZAPZAP_REMOTE_DIR="ZapZap"
+ZAPZAP_TAR="zapzap-session.tar.gz"
+ZAPZAP_DATA_DIR="$HOME/.local/share/ZapZap"
+
 # Local SSH identity.
 SSH_CONFIG_DIR="$HOME/.ssh"
 SSH_PRIVATE_KEY="$SSH_CONFIG_DIR/id_ed25519_cascade"
@@ -627,6 +634,120 @@ Installation will continue normally."
 }
 
 # ------------------------------------------------------------------------------
+# ZapZap Session
+# ------------------------------------------------------------------------------
+
+bootstrap_zapzap_session() {
+    print_header "ZapZap Session Bootstrap"
+
+    if [[ -d "$ZAPZAP_DATA_DIR" && -n "$(ls -A "$ZAPZAP_DATA_DIR" 2>/dev/null)" ]]; then
+        echo "✓ Existing ZapZap data found."
+        echo "  Skipping NAS restore."
+        return 0
+    fi
+
+    if [[ ! -f "$SMB_CRED_FILE" ]]; then
+        print_warning \
+            "SMB credentials are unavailable. \
+ZapZap session will not be restored from NAS."
+        return 0
+    fi
+
+    local TEMP_DIR
+    if ! TEMP_DIR="$(mktemp -d)"; then
+        print_warning \
+            "Could not create a temporary directory. \
+ZapZap session restore skipped."
+        return 0
+    fi
+
+    cleanup_zapzap_bootstrap() {
+        rm -rf "$TEMP_DIR"
+    }
+    trap cleanup_zapzap_bootstrap RETURN
+
+    echo "Attempting to restore the ZapZap session from NAS..."
+    echo
+    echo "  Share: $SMB_BOOTSTRAP_SHARE"
+    echo "  Path : $ZAPZAP_REMOTE_DIR/"
+    echo
+
+    local TEMP_CRED=""
+    if ! TEMP_CRED="$(mktemp)"; then
+        print_warning \
+            "Could not create a temporary credentials file. \
+ZapZap session restore skipped."
+        return 0
+    fi
+
+    if ! sudo cat "$SMB_CRED_FILE" > "$TEMP_CRED"; then
+        rm -f "$TEMP_CRED"
+        print_warning \
+            "Could not read SMB credentials. \
+ZapZap session restore skipped."
+        return 0
+    fi
+
+    chmod 600 "$TEMP_CRED"
+
+    if ! nix-shell -p samba --run "
+        smbclient \
+            \"$SMB_BOOTSTRAP_SHARE\" \
+            -A \"$TEMP_CRED\" \
+            -c '
+                cd \"$ZAPZAP_REMOTE_DIR\";
+                get $ZAPZAP_TAR $TEMP_DIR/$ZAPZAP_TAR;
+                get $ZAPZAP_TAR.sha256 $TEMP_DIR/$ZAPZAP_TAR.sha256;
+            '
+    "
+    then
+        rm -f "$TEMP_CRED"
+        print_warning \
+            "Could not connect to the NAS or retrieve the ZapZap session.
+Installation will continue normally."
+        return 0
+    fi
+
+    rm -f "$TEMP_CRED"
+
+    if [[ ! -s "$TEMP_DIR/$ZAPZAP_TAR" ]]; then
+        print_warning \
+            "$ZAPZAP_TAR was not found on the NAS.
+Installation will continue normally."
+        return 0
+    fi
+
+    # A checksum next to the archive is optional, but when it exists it has to pass:
+    # this archive is a credential, not a preference file.
+    if [[ -s "$TEMP_DIR/$ZAPZAP_TAR.sha256" ]] \
+        && ! ( cd "$TEMP_DIR" && sha256sum -c "$ZAPZAP_TAR.sha256" >/dev/null 2>&1 )
+    then
+        print_warning \
+            "The ZapZap session archive failed its checksum.
+Installation will continue normally."
+        return 0
+    fi
+
+    if ! mkdir -p "$HOME/.local/share"; then
+        print_warning \
+            "Could not create ~/.local/share.
+Installation will continue normally."
+        return 0
+    fi
+
+    if ! tar -xzf "$TEMP_DIR/$ZAPZAP_TAR" -C "$HOME/.local/share"; then
+        print_warning \
+            "Could not extract the ZapZap session.
+Installation will continue normally."
+        return 0
+    fi
+
+    chmod -R u+rwX,go-rwx "$ZAPZAP_DATA_DIR" 2>/dev/null || true
+
+    echo "✓ ZapZap session restored."
+}
+
+# ------------------------------------------------------------------------------
 # NixOS Bootstrap
 # ------------------------------------------------------------------------------
 
@@ -676,8 +797,8 @@ main() {
 
     echo "Fresh NixOS bootstrap starting..."
     echo
-    echo "The installation will continue even if SSH or Syncthing identity"
-    echo "cannot be restored from the NAS."
+    echo "The installation will continue even if the SSH, Syncthing or ZapZap"
+    echo "identity cannot be restored from the NAS."
     echo
 
     # --------------------------------------------------------------------------
@@ -702,6 +823,7 @@ main() {
     setup_smb_credentials
     bootstrap_ssh_identity
     bootstrap_syncthing_identity
+    bootstrap_zapzap_session
     report_pinned_revision
     bootstrap_system
 
