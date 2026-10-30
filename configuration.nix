@@ -27,6 +27,7 @@
       ./modules/edge-policy.nix
       ./modules/pwa-edge.nix
       ./modules/games.nix
+      ./modules/games-storage.nix
       ./modules/content-creation.nix
       ./modules/syncthing.nix
       ./modules/localsend.nix
