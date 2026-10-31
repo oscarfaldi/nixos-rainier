@@ -27,6 +27,7 @@
       ./modules/edge-policy.nix
       ./modules/pwa-edge.nix
       ./modules/games.nix
+      ./modules/wine.nix
       ./modules/games-storage.nix
       ./modules/roblox.nix
       ./modules/content-creation.nix
