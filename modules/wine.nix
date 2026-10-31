@@ -7,6 +7,15 @@
 # Standalone on purpose. This is the only file that decides how Windows
 # executables run here, so the runtime is never smeared across packages.nix.
 #
+# Steam is used as a harness here, not as a store. Nothing is bought, no game
+# account is involved, and a cracked release stays exactly what it is: the .exe
+# gets a shortcut, Steam only provides the engine that runs it. It is already
+# installed for CS2, and it is the practical way to get Proton on NixOS because
+# it is the only thing shipping Proton together with the FHS runtime Proton
+# needs. A bare Proton build cannot even start here - NixOS has no
+# /lib64/ld-linux, so executing it directly fails with
+# NixOS cannot run dynamically linked executables.
+#
 # The runtime is Proton through Steam, not a bare Wine installation:
 #
 # - Steam already ships Proton, keeps one prefix per game under
