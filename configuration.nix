@@ -30,6 +30,9 @@
       ./modules/games-storage.nix
       ./modules/roblox.nix
       ./modules/content-creation.nix
+      ./modules/kdenlive.nix
+      ./modules/photocraft.nix
+      ./modules/filmcraft.nix
       ./modules/syncthing.nix
       ./modules/localsend.nix
       ./modules/smb-kernel-mount.nix

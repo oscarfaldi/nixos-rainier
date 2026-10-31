@@ -1,0 +1,389 @@
+{
+  "version": 2,
+  "general": {
+    "interfaceLanguage": "en",
+    "atStartup": "emptyProject",
+    "whenOpeningProject": "showOpenDialog",
+    "binsDoubleClick": "openInPlace",
+    "binsCmdDoubleClick": "openNewTab",
+    "binsOptDoubleClick": "openNewWindow",
+    "projectsDoubleClick": "openNewTab",
+    "projectsOptDoubleClick": "openNewWindow",
+    "showEventIndicator": true,
+    "showToolTips": true,
+    "showRichToolTips": true,
+    "showWorkspaceResetWarning": true,
+    "showProjectLoadErrors": true,
+    "showCompatibilityIssues": true,
+    "showProjectBinInTab": true,
+    "showMaskTrackerPreview": true,
+    "recentProjects": []
+  },
+  "appearance": {
+    "colorTheme": "darkest",
+    "appearanceMode": "dark",
+    "darkTheme": "darkest",
+    "lightTheme": "light",
+    "favoriteThemes": [],
+    "accessibleContrast": false,
+    "highlightColor": "#2f6bdf",
+    "uiScale": "auto",
+    "animations": true
+  },
+  "audio": {
+    "automatchTime": 1.0,
+    "largeVolumeAdjustment": 6.0,
+    "linearKeyframeThinning": true,
+    "minimumTimeIntervalThinning": false,
+    "minimumTimeMs": 20,
+    "switchToTouchAfterWrite": true,
+    "mixdownType": "frontRear",
+    "sumToMonoInSource": true,
+    "scrubAudio": true,
+    "maintainPitchShuttling": true,
+    "muteInputDuringRecording": false,
+    "generateWaveformsOnImport": true,
+    "multithreadedWaveforms": false,
+    "renderAudioWithVideo": false,
+    "autoTagAudioTypes": true,
+    "alwaysOverrideAudioTags": false,
+    "editInAuditionLocation": "nextToMedia",
+    "dialogueTargetLufs": -23.0,
+    "musicTargetLufs": -25.0,
+    "sfxTargetLufs": -21.0,
+    "ambienceTargetLufs": -30.0
+  },
+  "audioHardware": {
+    "deviceClass": "",
+    "defaultInput": "",
+    "defaultOutput": "",
+    "bufferSize": 512,
+    "sampleRate": 48000,
+    "forceDocumentRate": false,
+    "mapLeft": 0,
+    "mapRight": 1
+  },
+  "autoSave": {
+    "enabled": true,
+    "intervalMinutes": 5,
+    "maxVersions": 20,
+    "saveCurrentProject": false,
+    "recoveryJournal": true,
+    "recoveryIntervalSeconds": 5,
+    "scratchFolders": []
+  },
+  "color": {
+    "displayColorManagement": false,
+    "extendedDynamicRange": false,
+    "hdrGraphicsWhite": "203"
+  },
+  "graphics": {
+    "ligatures": true,
+    "hindiDigits": false,
+    "smartQuotes": true,
+    "paragraphDirection": "ltr",
+    "textLineJoin": "miter",
+    "textMiterLimit": 2.5,
+    "textLineCap": "butt",
+    "backgroundFill": "allLines",
+    "defaultFont": "Inter",
+    "missingFontReplacement": "Inter",
+    "emojiFont": "",
+    "shapeLineJoin": "miter",
+    "shapeMiterLimit": 2.5,
+    "shapeLineCap": "butt",
+    "captionFont": "JetBrains Mono",
+    "captionMonospaceOnly": true,
+    "cea708Wide": false
+  },
+  "labels": {
+    "colors": {
+      "blue": {
+        "name": "Blue",
+        "color": "#192d94"
+      },
+      "brown": {
+        "name": "Brown",
+        "color": "#583d14"
+      },
+      "caribbean": {
+        "name": "Caribbean",
+        "color": "#355418"
+      },
+      "cerulean": {
+        "name": "Cerulean",
+        "color": "#23535a"
+      },
+      "forest": {
+        "name": "Forest",
+        "color": "#404a11"
+      },
+      "green": {
+        "name": "Green",
+        "color": "#295c2d"
+      },
+      "iris": {
+        "name": "Iris",
+        "color": "#1d4a64"
+      },
+      "lavender": {
+        "name": "Lavender",
+        "color": "#6b1c82"
+      },
+      "magenta": {
+        "name": "Magenta",
+        "color": "#791c56"
+      },
+      "mango": {
+        "name": "Mango",
+        "color": "#803f17"
+      },
+      "purple": {
+        "name": "Purple",
+        "color": "#590db0"
+      },
+      "rose": {
+        "name": "Rose",
+        "color": "#801836"
+      },
+      "tan": {
+        "name": "Tan",
+        "color": "#6c5b47"
+      },
+      "teal": {
+        "name": "Teal",
+        "color": "#1f4d45"
+      },
+      "violet": {
+        "name": "Violet",
+        "color": "#380ea7"
+      },
+      "yellow": {
+        "name": "Yellow",
+        "color": "#6e6628"
+      }
+    },
+    "defaults": {
+      "movie": "Iris",
+      "video": "Violet",
+      "audio": "Caribbean",
+      "still": "Lavender",
+      "sequence": "Forest",
+      "dynamicLink": "Rose",
+      "bin": "Mango",
+      "captions": "Mango"
+    },
+    "preset": "Default"
+  },
+  "media": {
+    "indeterminateTimebase": "29.97df",
+    "timecode": "useMediaSource",
+    "frameCount": "startAt0",
+    "defaultMediaScaling": "none",
+    "writeXmpId": false,
+    "validateContentCredentials": true,
+    "writeClipMarkersToXmp": false,
+    "enableXmpLinking": false,
+    "includeCaptionsOnImport": true,
+    "enableProxies": false,
+    "allowDuplicateMedia": false,
+    "createFolderForImportedProjects": false,
+    "autoHideDependentClips": false,
+    "importImageSequences": false,
+    "refreshGrowingFiles": true,
+    "resumeGrowingPlayback": false,
+    "growingRefreshSeconds": 60,
+    "hardwareDecoding": true,
+    "proresHardwareEncoding": true
+  },
+  "mediaAnalysis": {
+    "cacheResults": "mediaCache",
+    "analyzeImportedMedia": true,
+    "autoTranscribe": false,
+    "autoTranscribeScope": "sequenceClips",
+    "speakerLabeling": "on",
+    "languageAutoDetect": false,
+    "defaultLanguage": "en",
+    "whisperModel": "whisper-base"
+  },
+  "mediaCache": {
+    "location": "",
+    "saveNextToMedia": false,
+    "databaseLocation": "",
+    "management": "never",
+    "olderThanDays": 90,
+    "maxSizeGb": 92
+  },
+  "memory": {
+    "ramReservedGb": 4,
+    "frameCacheMb": 768
+  },
+  "playback": {
+    "prerollSeconds": 3.0,
+    "postrollSeconds": 2.0,
+    "stepManyFrames": 5,
+    "pauseEncoderQueue": true,
+    "enableTransmit": false,
+    "disableVideoInBackground": true,
+    "draftDecode": false,
+    "hardwareDecoding": "auto"
+  },
+  "plugins": {
+    "developerMode": false
+  },
+  "timeline": {
+    "videoTransitionDuration": 30.0,
+    "videoTransitionUnit": "frames",
+    "audioTransitionDuration": 1.0,
+    "audioTransitionUnit": "seconds",
+    "stillImageDuration": 5.0,
+    "stillImageUnit": "seconds",
+    "autoScroll": "pageScroll",
+    "mouseScrolling": "vertical",
+    "monoMediaTracks": "useFile",
+    "stereoMediaTracks": "useFile",
+    "surroundMediaTracks": "useFile",
+    "multichannelMonoMediaTracks": "useFile",
+    "focusTimelineOnEdit": false,
+    "snapPlayhead": true,
+    "returnToBeginning": true,
+    "outOfSyncUnlinked": false,
+    "playAfterRendering": true,
+    "clipMismatchWarning": true,
+    "matchFrameSetsIn": false,
+    "restoreOpenSequences": true,
+    "addTracksAutomatically": true,
+    "dropImportToTimeline": true
+  },
+  "trim": {
+    "largeTrimOffset": 5,
+    "largeTrimOffsetAudio": 100,
+    "selectionToolRollRipple": false,
+    "toolChangesTrimType": true,
+    "shiftOverlappingClips": false,
+    "rippleAddsEdits": false,
+    "playheadDeterminesLoop": false,
+    "dynamicRippleUpdates": true
+  },
+  "essentialSound": {
+    "userPresets": []
+  },
+  "guides": {
+    "templates": []
+  },
+  "voiceOver": {
+    "source": "",
+    "inputChannel": 0,
+    "name": "Voice-over",
+    "countdownSoundCues": true,
+    "prerollSeconds": 2.0,
+    "postrollSeconds": 2.0
+  },
+  "projectPanel": {
+    "view": {
+      "mode": "icon",
+      "iconSize": 110.0,
+      "fontSize": "medium",
+      "columns": [
+        {
+          "name": "Name",
+          "width": 220.0
+        },
+        {
+          "name": "Frame Rate",
+          "width": 80.0
+        },
+        {
+          "name": "Media Start",
+          "width": 110.0
+        },
+        {
+          "name": "Media End",
+          "width": 110.0
+        },
+        {
+          "name": "Media Duration",
+          "width": 110.0
+        },
+        {
+          "name": "Video In Point",
+          "width": 110.0
+        },
+        {
+          "name": "Video Out Point",
+          "width": 110.0
+        },
+        {
+          "name": "Video Duration",
+          "width": 110.0
+        },
+        {
+          "name": "Video Info",
+          "width": 170.0
+        },
+        {
+          "name": "Audio Info",
+          "width": 170.0
+        },
+        {
+          "name": "Tape Name",
+          "width": 110.0
+        },
+        {
+          "name": "Description",
+          "width": 170.0
+        }
+      ],
+      "sort": {
+        "column": "Name",
+        "descending": false
+      },
+      "iconSort": {
+        "column": "",
+        "descending": false
+      }
+    },
+    "previewArea": false,
+    "thumbnails": false,
+    "thumbnailsShowEffects": true,
+    "hoverScrub": true,
+    "thumbnailControlsAllDevices": false,
+    "presets": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    "currentPreset": null,
+    "freeform": {
+      "grid": 20.0,
+      "snap": false,
+      "showNames": true,
+      "showDurations": true,
+      "cardSize": 128.0
+    }
+  },
+  "mediaBrowser": {
+    "favorites": [],
+    "recent": [],
+    "lastDir": "",
+    "fileTypes": "all",
+    "view": "list",
+    "columns": [
+      "Name",
+      "Frame Rate",
+      "Media Duration",
+      "Video Info",
+      "Size"
+    ],
+    "importAsImageSequence": false,
+    "hoverScrub": true,
+    "thumbnailSize": 120.0
+  }
+}
