@@ -60,6 +60,14 @@ NoDisplay=true
 Terminal=false
 StartupNotify=false
 DESKTOP
+
+    # GTK/Thunar looks up a mime icon named application-x-fcpxml; without one a .fcpxml
+    # gets the generic white page. Reuse FilmCraft's own icon at every size it ships -
+    # the same mechanism kdenlive used to give .kdenlive files its icon.
+    for src in ${contents}/usr/share/icons/hicolor/*/apps/ai.storyteller.filmcraft.png; do
+      size=$(basename "$(dirname "$(dirname "$src")")")
+      install -Dm644 "$src" "$out/share/icons/hicolor/$size/mimetypes/application-x-fcpxml.png"
+    done
   '';
 in
 
