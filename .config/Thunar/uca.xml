@@ -440,7 +440,7 @@
     <submenu>Content Creation</submenu>
     <unique-id>1781935446753343-602</unique-id>
     <command>auto-cut %F</command>
-    <description>Remove silent sections and create a Kdenlive rough cut</description>
+    <description>Remove silent sections and create an XML rough cut for FilmCraft / Premiere</description>
     <range>*</range>
     <patterns>*.mp4;*.MP4;*.mov;*.MOV;*.mkv;*.MKV;*.webm;*.mts;*.m2ts;*.ts;*.avi;*.mxf;*.m4v</patterns>
     <video-files/>

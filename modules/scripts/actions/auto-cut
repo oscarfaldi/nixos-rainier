@@ -29,6 +29,13 @@ SMOOTH_MINCLIP="0.10s"
 
 OUTPUT_SUFFIX="_autoedit"
 
+# Rough cuts are written as xmeml v5 (.xml) via Auto-Editor's `premiere` export.
+# FilmCraft imports it as "Final Cut Pro XML" with the media linked, and Premiere
+# imports the same file, so one cut works in both editors.
+EXPORT_FORMAT="premiere"
+OUTPUT_EXTENSION=".xml"
+FORMAT_LABEL="FCP7 XML (.xml) - FilmCraft / Premiere"
+
 # How often the wrapper refreshes the ETA/title.
 PROGRESS_INTERVAL="0.50"
 
@@ -117,11 +124,11 @@ unique_output_path() {
     local candidate
     local counter
 
-    candidate="${directory}/${stem}.kdenlive"
+    candidate="${directory}/${stem}${OUTPUT_EXTENSION}"
     counter=2
 
     while [[ -e "$candidate" ]]; do
-        candidate="${directory}/${stem}-${counter}.kdenlive"
+        candidate="${directory}/${stem}-${counter}${OUTPUT_EXTENSION}"
         counter=$((counter + 1))
     done
 
@@ -287,7 +294,7 @@ run_auto_editor() {
         --margin "${MARGIN_BEFORE},${MARGIN_AFTER}" \
         --smooth "${SMOOTH_MINCUT},${SMOOTH_MINCLIP}" \
         --progress modern \
-        --export kdenlive \
+        --export "$EXPORT_FORMAT" \
         -o "$output"
 
     : > "$logfile"
@@ -432,6 +439,7 @@ for input in "$@"; do
     printf 'File      : %d/%d\n' "$current_file" "$total_files"
     printf 'Input     : %s\n' "$filename"
     printf 'Output    : %s\n' "$(basename "$output")"
+    printf 'Format    : %s\n' "$FORMAT_LABEL"
     printf 'Duration  : %s\n' "$(format_duration "$duration")"
     printf 'Threshold : %s\n' "$AUDIO_THRESHOLD"
     printf 'Margin    : %s before / %s after\n' \
