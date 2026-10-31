@@ -1,8 +1,7 @@
 { config, lib, pkgs, ... }:
 
-# FilmCraft (ArtCraft) — open-source, native video editor (Premiere/Resolve-shaped UI),
-# on trial against kdenlive. Not in nixpkgs at any revision yet, so it is packaged
-# from the official AppImage.
+# FilmCraft (ArtCraft) — open-source, native video editor (Premiere/Resolve-shaped UI).
+# Not in nixpkgs at any revision yet, so it is packaged from the official AppImage.
 #
 # Declarative here:
 #   - the app itself (AppImage wrapper below)
