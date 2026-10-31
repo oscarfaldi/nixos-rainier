@@ -29,12 +29,13 @@ SMOOTH_MINCLIP="0.10s"
 
 OUTPUT_SUFFIX="_autoedit"
 
-# Rough cuts are written as xmeml v5 (.xml) via Auto-Editor's `premiere` export.
-# FilmCraft imports it as "Final Cut Pro XML" with the media linked, and Premiere
-# imports the same file, so one cut works in both editors.
-EXPORT_FORMAT="premiere"
-OUTPUT_EXTENSION=".xml"
-FORMAT_LABEL="FCP7 XML (.xml) - FilmCraft / Premiere"
+# Rough cuts are written as FCPXML 1.11 (.fcpxml) via Auto-Editor's `final-cut-pro`
+# export, which FilmCraft imports natively with the media linked. The extension is
+# specific to this format, so double-clicking the file can open FilmCraft (see the
+# mime association in modules/filmcraft.nix).
+EXPORT_FORMAT="final-cut-pro"
+OUTPUT_EXTENSION=".fcpxml"
+FORMAT_LABEL="FCPXML 1.11 (.fcpxml) - FilmCraft"
 
 # How often the wrapper refreshes the ETA/title.
 PROGRESS_INTERVAL="0.50"

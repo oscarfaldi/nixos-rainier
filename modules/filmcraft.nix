@@ -34,10 +34,43 @@ let
   };
 
   seed = ../assets/filmcraft;
+
+  # .fcpxml is not a registered type (it falls back to application/xml, which opens Edge),
+  # so double-clicking a rough cut did nothing useful. Ship a mime type for that extension
+  # and a hidden handler entry, then make it the default below.
+  fcpxmlMime = pkgs.runCommandLocal "filmcraft-fcpxml-mime" { } ''
+    mkdir -p $out/share/mime/packages $out/share/applications
+
+    cat > $out/share/mime/packages/x-fcpxml.xml <<'XML'
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-fcpxml">
+    <comment>Final Cut Pro XML timeline</comment>
+    <glob pattern="*.fcpxml"/>
+  </mime-type>
+</mime-info>
+XML
+
+    cat > $out/share/applications/filmcraft-fcpxml.desktop <<'DESKTOP'
+[Desktop Entry]
+Type=Application
+Name=FilmCraft Timeline
+Exec=filmcraft %f
+MimeType=application/x-fcpxml;
+NoDisplay=true
+Terminal=false
+StartupNotify=false
+DESKTOP
+  '';
 in
 
 {
+  # Double-clicking a .fcpxml timeline opens it in FilmCraft.
+  xdg.mime.defaultApplications."application/x-fcpxml" = "filmcraft-fcpxml.desktop";
+
   environment.systemPackages = [
+    fcpxmlMime
+
     (pkgs.appimageTools.wrapType2 {
       pname = "filmcraft";
       inherit version src;
