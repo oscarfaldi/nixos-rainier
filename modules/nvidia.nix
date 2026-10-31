@@ -1,16 +1,21 @@
-{ config, pkgs, ... }:
+{ config, lib, ... }:
 
 let
-  # nixpkgs builds nvibrant against NVIDIA's open-gpu headers only up to driver
-  # 610.43.02, but the 615 branch (see the package comment below) changed the NVAPI
-  # struct layout, so every ioctl fails ("AllocDevice ioctl failed") and nvibrant
-  # exits 1 - which kills the cs2 launcher before Steam ever starts. Rebuild it
-  # against the driver that is actually running. openGpuHash has to be refreshed
-  # when the driver moves to a version with no matching open-gpu tag yet.
+  # nixpkgs only generates nvibrant's open-gpu header patches up to the tag stored
+  # in nvibrant.passthru.latestDriverVersion (610.43.02 in this pin). The 615
+  # branch changed the NVAPI struct layout, so a binary built against the 610
+  # headers fails every ioctl ("AllocDevice ioctl failed") and exits 1 - which
+  # kills the cs2 launcher before Steam ever starts. Walk the tag chain up to the
+  # driver that is actually running instead.
   driverVersion = config.hardware.nvidia.package.version;
+  nvibrantPatchEnd = "610.43.02";
+
+  # Hash of nvidia/open-gpu-kernel-modules@515.43.04 with the patch series
+  # regenerated through the running driver version. When the driver moves past a
+  # version this nixpkgs pin already patches, set this to lib.fakeHash, build
+  # once, and copy the "got:" hash out of the fixed-output hash mismatch error.
   openGpuHash = "sha256-A8EDw5nKg66VNwczEnUSwFvosB6puhvJjgdaGpSJMvA=";
 in
-
 {
   nixpkgs.overlays = [
     (final: prev: {
@@ -19,15 +24,18 @@ in
 
         srcs = [
           old.passthru.srcAttrs.nvibrant
-          (old.passthru.srcAttrs.open-gpu.overrideAttrs (_: { hash = openGpuHash; }))
-        ];
+          (old.passthru.srcAttrs.open-gpu.overrideAttrs (openGpu: {
+            # The tag walk lives in postCheckout, and the stop tag is already
+            # interpolated into that script, so rewrite it there. postUnpack only
+            # moves directories and never contains a driver version.
+            postCheckout = builtins.replaceStrings
+              [ nvibrantPatchEnd ]
+              [ driverVersion ]
+              openGpu.postCheckout;
 
-        # The unpack script generates a header patch per open-gpu tag and stops at
-        # latestDriverVersion; point that stop at the driver in use.
-        postUnpack = builtins.replaceStrings
-          [ old.passthru.latestDriverVersion ]
-          [ driverVersion ]
-          old.postUnpack;
+            hash = openGpuHash;
+          }))
+        ];
       });
     })
   ];
