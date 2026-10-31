@@ -38,6 +38,17 @@ in
 {
   services.flatpak.enable = true;
 
+  # Sober lands in /var/lib/flatpak/exports/share/applications, and Quickshell only
+  # starts watching desktop-entry directories that already exist when the shell comes
+  # up (DesktopEntryMonitor::startMonitoring skips missing paths). On a fresh install
+  # the directory does not exist until the download above finishes, which is minutes
+  # after the shell is already running, so Roblox never reached the launcher until the
+  # next login. Creating the directory at boot means it is watched before the install
+  # writes into it, and the launcher picks the entry up live.
+  systemd.tmpfiles.rules = [
+    "d /var/lib/flatpak/exports/share/applications 0755 root root -"
+  ];
+
   systemd.services.flatpak-install-sober = {
     description = "Install Roblox (Sober) from Flathub";
     wantedBy = [ "multi-user.target" ];
