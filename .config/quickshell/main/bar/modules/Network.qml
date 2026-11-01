@@ -127,7 +127,7 @@ Item {
                     ? (root.device.type === DeviceType.Wired ? "󰈀" : "󰖩")
                     : "󰖪"
 
-            color: hover.hovered ? root.theme.accent : (root.online ? root.theme.fg : root.theme.warning)
+            color: hover.hovered ? root.theme.hover : (root.online ? root.theme.fg : root.theme.warning)
 
             font.family: root.theme.fontFamily
             font.pixelSize: root.theme.fontSize
@@ -139,7 +139,7 @@ Item {
         Text {
             text: root.label
 
-            color: hover.hovered ? root.theme.accent : (root.online ? root.theme.fg : root.theme.warning)
+            color: hover.hovered ? root.theme.hover : (root.online ? root.theme.fg : root.theme.warning)
 
             font.family: root.theme.fontFamily
             font.pixelSize: root.theme.fontSize

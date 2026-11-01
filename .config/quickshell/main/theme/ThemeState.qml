@@ -26,6 +26,9 @@ QtObject {
     property string foreground: "#d4be98"
     property string mutedText: "#665c54"
     property string accentText: "#7daea3"
+    // Hover tone for clickable bar text. Optional in the palette: palettes that leave it out
+    // follow their accent, which is what every module used before this token existed.
+    property string hoverText: "#7daea3"
     property string warningText: "#ea6962"
     property string successText: "#a9b665"
 
@@ -40,6 +43,7 @@ QtObject {
     readonly property color fg: root.foreground
     readonly property color muted: root.mutedText
     readonly property color accent: root.accentText
+    readonly property color hover: root.hoverText
     readonly property color warning: root.warningText
     readonly property color success: root.successText
 
@@ -66,10 +70,17 @@ QtObject {
             root.mutedText = data.muted;
         if (typeof data.accent === "string" && data.accent !== "")
             root.accentText = data.accent;
+        // A palette whose accent is all but identical to its foreground (gruvbox: cream #ccc3a3 on
+        // beige #d4be98, 1.02:1) names a separate hover tone; otherwise hovering repaints the text in
+        // its own colour and reads as "nothing happened".
+        root.hoverText = (typeof data.hover === "string" && data.hover !== "")
+                ? data.hover
+                : root.accentText;
         if (typeof data.warning === "string" && data.warning !== "")
             root.warningText = data.warning;
         if (typeof data.success === "string" && data.success !== "")
             root.successText = data.success;
+
     }
 
     function reload() {

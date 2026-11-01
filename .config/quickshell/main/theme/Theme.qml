@@ -22,6 +22,8 @@ QtObject {
     readonly property color fg: ThemeState.fg
     readonly property color muted: ThemeState.muted
     readonly property color accent: ThemeState.accent
+    // Hover tone for clickable text. Equal to the accent unless the palette names one.
+    readonly property color hover: ThemeState.hover
     readonly property color warning: ThemeState.warning
     readonly property color success: ThemeState.success
 
@@ -52,6 +54,10 @@ QtObject {
     // collapses to 0, which is the reduce-motion switch Omarchy ships as `Style.duration()`.
     readonly property bool animationsEnabled: true
     readonly property int motion: 110
+    // Wallpaper crossfade. Long enough that the swap reads as a dissolve instead of a hard cut
+    // (a plain source change left the desktop bare for a frame while the image decoded), short
+    // enough that it does not feel like a delay. 2 s read as slow, 1.2 s read as a dissolve, 700 ms is a quick cross-fade.
+    readonly property int wallpaperFade: animationsEnabled ? 700 : 0
 
     function duration(ms) {
         return animationsEnabled ? ms : 0;

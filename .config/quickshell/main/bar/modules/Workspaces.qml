@@ -56,15 +56,21 @@ Item {
 
                     text: String(modelData.idx)
 
+                    // Active keeps the accent (state outranks hover); an inactive number lifts to
+                    // the hover tone so the pointer shows what it is about to click.
                     color: modelData.is_active
                         ? root.theme.accent
-                        : root.theme.muted
+                        : (wsHover.hovered ? root.theme.hover : root.theme.muted)
 
                     font.family: root.theme.fontFamily
                     font.pixelSize: root.theme.fontSize
                     font.weight: Font.Bold
 
                     verticalAlignment: Text.AlignVCenter
+                }
+
+                HoverHandler {
+                    id: wsHover
                 }
 
                 MouseArea {

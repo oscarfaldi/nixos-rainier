@@ -31,7 +31,7 @@ Item {
 
         text: ""
         // Hover affordance, same convention as Network and Audio.
-        color: hover.hovered ? root.theme.accent : root.theme.fg
+        color: hover.hovered ? root.theme.hover : root.theme.fg
 
         font.family: root.theme.fontFamily
         font.pixelSize: root.theme.fontSize

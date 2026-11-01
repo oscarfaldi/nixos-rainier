@@ -96,7 +96,9 @@ Current focus: the bar and its popups. All of it runs live and is calibrated mod
   alignment).
 - HOVER AFFORDANCE: every clickable module signals itself before the click —
   `HoverHandler { cursorShape: Qt.PointingHandCursor }` plus
-  `color: hover.hovered ? theme.accent : theme.fg`. Present on Network, Audio and SystemActions;
+  `color: hover.hovered ? theme.hover : theme.fg` (theme.hover follows the palette's `hover`,
+  and falls back to `accent` when the palette does not name one). Present on Network, Audio,
+  SystemActions, Clock, Weather, TimerIndicator and the workspace numbers;
   tray items take the pointing cursor. The owner asked for this explicitly ("give me a sign that
   I am about to click this"), so a new clickable module without it is incomplete.
 - POPUP SWITCHING: services/PopupManager.qml holds ONE active popup globally

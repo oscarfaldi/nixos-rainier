@@ -87,7 +87,7 @@ Item {
 
           text: root.countdownText
           color: TimerService.cdStatus === "running"
-            ? (countdownHover.hovered ? root.theme.accent : root.theme.fg)
+            ? (countdownHover.hovered ? root.theme.hover : root.theme.fg)
             : root.dim
 
           font.family: root.theme.fontFamily
@@ -134,7 +134,7 @@ Item {
           anchors.centerIn: parent
 
           text: root.alarmText
-          color: alarmHover.hovered ? root.theme.accent : root.theme.fg
+          color: alarmHover.hovered ? root.theme.hover : root.theme.fg
 
           font.family: root.theme.fontFamily
           font.pixelSize: root.theme.fontSize

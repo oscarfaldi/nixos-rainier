@@ -51,7 +51,7 @@ Item {
 
         // Hover affordance: same treatment as the Network module, so every
         // clickable module signals "this opens a popup" before the click.
-        color: hover.hovered ? root.theme.accent : root.theme.fg
+        color: hover.hovered ? root.theme.hover : root.theme.fg
 
         font.family: root.theme.fontFamily
         font.pixelSize: root.theme.fontSize

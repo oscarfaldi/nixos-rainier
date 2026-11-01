@@ -64,7 +64,7 @@ Item {
 
         Text {
           text: Weather.icon
-          color: weatherHover.hovered ? root.theme.accent : root.theme.fg
+          color: weatherHover.hovered ? root.theme.hover : root.theme.fg
 
           anchors.verticalCenter: parent.verticalCenter
 
@@ -75,7 +75,7 @@ Item {
 
         Text {
           text: Weather.tempText
-          color: weatherHover.hovered ? root.theme.accent : root.theme.fg
+          color: weatherHover.hovered ? root.theme.hover : root.theme.fg
 
           anchors.verticalCenter: parent.verticalCenter
 

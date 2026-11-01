@@ -72,7 +72,7 @@ Item {
         anchors.verticalCenter: parent.verticalCenter
 
         text: String.fromCodePoint(0xF073) // calendar
-        color: dateHover.hovered ? root.theme.accent : root.theme.fg
+        color: dateHover.hovered ? root.theme.hover : root.theme.fg
 
         font.family: root.theme.fontFamily
         font.pixelSize: root.theme.fontSize
@@ -87,7 +87,7 @@ Item {
         anchors.verticalCenter: parent.verticalCenter
 
         text: root.dateLabel
-        color: dateHover.hovered ? root.theme.accent : root.theme.fg
+        color: dateHover.hovered ? root.theme.hover : root.theme.fg
 
         font.family: root.theme.fontFamily
         font.pixelSize: root.theme.fontSize
@@ -134,7 +134,7 @@ Item {
         anchors.verticalCenter: parent.verticalCenter
 
         text: String.fromCodePoint(0xF017) // clock
-        color: timeHover.hovered ? root.theme.accent : root.theme.fg
+        color: timeHover.hovered ? root.theme.hover : root.theme.fg
 
         font.family: root.theme.fontFamily
         font.pixelSize: root.theme.fontSize
@@ -149,7 +149,7 @@ Item {
         anchors.verticalCenter: parent.verticalCenter
 
         text: root.timeLabel
-        color: timeHover.hovered ? root.theme.accent : root.theme.fg
+        color: timeHover.hovered ? root.theme.hover : root.theme.fg
 
         font.family: root.theme.fontFamily
         font.pixelSize: root.theme.fontSize
