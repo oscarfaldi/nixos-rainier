@@ -87,6 +87,10 @@ bright_foreground=$(pal bright_foreground)
 muted=$(pal muted)
 selection=$(pal selection)
 accent=$(pal accent)
+# Hover tone for the bar. Optional: a palette that does not name one follows its accent,
+# which is exactly what the shell used before the token existed.
+hover=$(pal hover)
+[[ -n "$hover" ]] || hover="$accent"
 red=$(pal red)
 green=$(pal green)
 yellow=$(pal yellow)
@@ -150,6 +154,7 @@ cat >"$state_dir/theme.json" <<EOF
   "foreground": "$foreground",
   "muted": "$muted",
   "accent": "$accent",
+  "hover": "$hover",
   "selection": "$selection",
   "warning": "$red",
   "success": "$green"
@@ -461,7 +466,23 @@ if [[ "$(pal generate_gtk)" == "true" ]]; then
         # Generating costs ~5-9s (4 MB theme copied + ~1000 icon links). Switching back to a palette
         # that was already generated must not pay that again: the palette file's hash is the cache key.
         gen_key=$(sha256sum "$colors" | cut -c1-16)
-        if [[ -f "$gen_dir/.qs-palette" && "$(cat "$gen_dir/.qs-palette" 2>/dev/null)" == "$gen_key" && -f "$gen_dir/gtk-3.0/gtk.css" ]]; then
+
+        # Prefer the copy Nix already generated into the store (modules/scripts/themes-tool.nix). A
+        # switch then costs nothing, every palette is equally fast even the first time, and no cache
+        # can go stale. Any runtime copy is REMOVED here: ~/.local/share comes before the system
+        # profile in XDG_DATA_DIRS, so a leftover directory would shadow the store theme forever.
+        store_gtk=""
+        for _d in "/run/current-system/sw/share" "$HOME/.local/state/nix/profile/share" \
+                  "/etc/profiles/per-user/$(id -un)/share"; do
+            [[ -f "$_d/themes/$gen_theme/gtk-3.0/gtk.css" ]] && { store_gtk="$_d/themes/$gen_theme"; break; }
+        done
+
+        if [[ -n "$store_gtk" ]]; then
+            gtk_theme="$gen_theme"
+            gen_cached=1
+            rm -rf "$gen_dir"
+            echo "theme-apply: using store-generated GTK theme $gen_theme"
+        elif [[ -f "$gen_dir/.qs-palette" && "$(cat "$gen_dir/.qs-palette" 2>/dev/null)" == "$gen_key" && -f "$gen_dir/gtk-3.0/gtk.css" ]]; then
             gtk_theme="$gen_theme"
             echo "theme-apply: reusing generated GTK theme $gen_theme"
             gen_cached=1
@@ -492,8 +513,7 @@ fi
 
 
 # GTK reads settings.ini at startup and, with no XSettings daemon running, it is the highest priority
-# source - which is what makes the theme name swappable at runtime. GTK has no theme hot reload, so an
-# open app keeps the old colours until it is restarted.
+# source - which is what makes the theme name swappable at runtime for running apps too.
 #
 # A missing theme is checked for FIRST: naming a theme that is not installed sends every GTK app to
 # the stock light fallback, which looks like "theming is broken" rather than "wrong name".
@@ -513,19 +533,6 @@ if (( ! gtk_found )); then
     gtk_theme="Adwaita-dark"
 fi
 
-mkdir -p "$HOME/.config/gtk-3.0" "$HOME/.config/gtk-4.0"
-for _dir in "$HOME/.config/gtk-3.0" "$HOME/.config/gtk-4.0"; do
-    rm -f "$_dir/settings.ini"
-    cat >"$_dir/settings.ini" <<EOF
-[Settings]
-gtk-theme-name=$gtk_theme
-gtk-icon-theme-name=$gtk_icons
-gtk-cursor-theme-name=Bibata-Modern-Ice
-gtk-font-name=JetBrainsMono Nerd Font 11
-gtk-application-prefer-dark-theme=1
-gtk-menu-images=1
-EOF
-done
 
 # ---------------------------------------------------------------- icons from the palette
 
@@ -551,78 +558,66 @@ if [[ "$(pal generate_icons)" == "true" ]]; then
         icon_theme="qs-$name"
         icon_dir="$HOME/.local/share/icons/$icon_theme"
         icon_key="$(sha256sum "$colors" | cut -c1-16)-$icon_color"
-        if [[ -f "$icon_dir/.qs-keys" && "$(cat "$icon_dir/.qs-keys" 2>/dev/null)" == "$icon_key" ]]; then
+        store_icons=""
+        for _d in "/run/current-system/sw/share" "$HOME/.local/state/nix/profile/share" \
+                  "/etc/profiles/per-user/$(id -un)/share"; do
+            [[ -d "$_d/icons/$icon_theme" ]] && { store_icons="$_d/icons/$icon_theme"; break; }
+        done
+
+        if [[ -n "$store_icons" ]]; then
+            gtk_icons="$icon_theme"
+            icon_cached=1
+            rm -rf "$icon_dir"
+            echo "theme-apply: using store-generated icon theme $icon_theme"
+        elif [[ -f "$icon_dir/.qs-keys" && "$(cat "$icon_dir/.qs-keys" 2>/dev/null)" == "$icon_key" ]]; then
             gtk_icons="$icon_theme"
             echo "theme-apply: reusing generated icon theme $icon_theme"
             icon_cached=1
         else
-        icon_cached=0
-        rm -rf "$icon_dir"
-        mkdir -p "$icon_dir"
-        cp "$papirus/index.theme" "$icon_dir/index.theme"
-        sed -i "s/^Name=.*/Name=$icon_theme/" "$icon_dir/index.theme"
-        grep -q '^Inherits=' "$icon_dir/index.theme" || printf 'Inherits=Papirus-Dark\n' >>"$icon_dir/index.theme"
+            icon_cached=0
+            rm -rf "$icon_dir"
 
-        made=0
-        # Glob the size directories instead of find: both Papirus-Dark and its size dirs are symlinks
-        # into the store, and find neither follows the root nor descends through a linked directory.
-        for sizedir in "$papirus"/*/places; do
-            [[ -d "$sizedir" ]] || continue
-            size=$(basename "$(dirname "$sizedir")")
-            real=$(readlink -f "$sizedir")
-            while IFS= read -r f; do
-                b=$(basename "$f")
-                case "$b" in
-                    folder.svg)             cand="folder-$icon_color.svg" ;;
-                    folder-*.svg)           cand="folder-$icon_color-${b#folder-}" ;;
-                    user-*.svg)             cand="user-$icon_color-${b#user-}" ;;
-                    inode-directory.svg)    cand="folder-$icon_color.svg" ;;
-                    *)                      continue ;;
-                esac
-                mkdir -p "$icon_dir/$size/places"
-
-                if [[ -e "$real/$cand" ]]; then
-                    ln -sfn "$real/$cand" "$icon_dir/$size/places/$b"
-                    made=$((made + 1))
-                    continue
-                fi
-
-                # No such colour variant (Papirus ships a few families only in blue/bluegrey, e.g.
-                # folder-bluegrey-public.svg). Leaving it out let the icon fall back to Papirus-Dark's
-                # BLUE artwork, which is why a single "public" folder showed up blue in an otherwise
-                # brown theme. Recolour the source SVG instead: each folder family carries exactly two
-                # paint colours (base + shade), so pairing them by order is enough and keeps the glyph.
-                family="${b#folder-}"
-                family="${family%%-*}"
-                [[ "$family" == "$icon_color" ]] && continue
-                src_generic="$real/folder-$family.svg"
-                dst_generic="$real/folder-$icon_color.svg"
-                [[ -r "$src_generic" && -r "$dst_generic" ]] || continue
-
-                mapfile -t _src < <(grep -oE '#[0-9a-fA-F]{6}' "$src_generic" | tr 'A-F' 'a-f' \
-                    | grep -vE '^#ffffff$|^#e4e4e4$' | awk '!seen[$0]++' | head -2)
-                mapfile -t _dst < <(grep -oE '#[0-9a-fA-F]{6}' "$dst_generic" | tr 'A-F' 'a-f' \
-                    | grep -vE '^#ffffff$|^#e4e4e4$' | awk '!seen[$0]++' | head -2)
-                (( ${#_src[@]} == 2 && ${#_dst[@]} == 2 )) || continue
-
-                sed -e "s/${_src[0]}/${_dst[0]}/gI" -e "s/${_src[1]}/${_dst[1]}/gI" \
-                    "$(readlink -f "$f")" >"$icon_dir/$size/places/$b"
-                chmod u+w "$icon_dir/$size/places/$b"
-                made=$((made + 1))
-            done < <(find "$real" -maxdepth 1 -name '*.svg' -type l 2>/dev/null)
-        done
-
-        if (( made > 0 )); then
-            printf '%s\n' "$icon_key" >"$icon_dir/.qs-keys"
-            gtk_icons="$icon_theme"
-        else
-            echo "theme-apply: no '$icon_color' folder variants found, keeping $gtk_icons" >&2
-        fi
+            # One Python process for the whole set, instead of a grep/tr/grep/awk/head pipeline per
+            # icon plus readlink and sed (~6 processes x ~1100 icons). Measured on this machine:
+            # 21.3 s for the shell loop - which is what made a cold switch look stuck for 20 s -
+            # against 0.31 s here, with byte-identical output: same 986 symlinks, same 1104
+            # recoloured SVGs.
+            #
+            # This path only runs for palettes Nix did not generate (a palette dropped into the user
+            # overlay). A failure here keeps the palette's packaged icon theme, never an empty one.
+            if theme-gen-icons "$papirus" "$icon_dir" "$icon_theme" "$icon_color"; then
+                printf '%s\n' "$icon_key" >"$icon_dir/.qs-keys"
+                gtk_icons="$icon_theme"
+            else
+                echo "theme-apply: icon generation failed, keeping $gtk_icons" >&2
+            fi
         fi
     else
         echo "theme-apply: Papirus-Dark not found, keeping $gtk_icons" >&2
     fi
 fi
+
+# Written HERE, not beside the theme lookup: `$gtk_icons` is only final after the icon theme has
+# been generated further up, so an earlier write put the palette's PRE-generation icon name
+# (Papirus-Dark) into settings.ini while dconf got the generated one - the two disagreed, and GTK
+# follows settings.ini. Measured after the fix: settings.ini and dconf name the same theme.
+#
+# GTK DOES repaint open windows on this setup (measured: a running Thunar went from #3b4252 under
+# nord to #46413e after a switch to gruvbox, with no restart), so a switch is not limited to
+# newly started apps - only the icon theme needs a restart.
+mkdir -p "$HOME/.config/gtk-3.0" "$HOME/.config/gtk-4.0"
+for _dir in "$HOME/.config/gtk-3.0" "$HOME/.config/gtk-4.0"; do
+    rm -f "$_dir/settings.ini"
+    cat >"$_dir/settings.ini" <<EOF
+[Settings]
+gtk-theme-name=$gtk_theme
+gtk-icon-theme-name=$gtk_icons
+gtk-cursor-theme-name=Bibata-Modern-Ice
+gtk-font-name=JetBrainsMono Nerd Font 11
+gtk-application-prefer-dark-theme=1
+gtk-menu-images=1
+EOF
+done
 
 # ---------------------------------------------------------------- GTK row metrics
 

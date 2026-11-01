@@ -23,6 +23,10 @@ mode = "dark"
 # gtk_accent collapses every cool-hued result in the generated GTK theme into the same warm tone;
 # `accent` is the one the shell, bar and popup borders, btop and the editor follow.
 accent = "#ccc3a3"
+# Bar hover. `accent` is a cream that sits on this palette's foreground (#ccc3a3 on
+# #d4be98 measures 1.02:1), so hovering repainted the text in its own colour and the bar
+# showed no response at all. Corner-to-corner accent: same amber family as the window border.
+hover = "#d9a45f"
 gtk_accent = "#ccc3a3"
 selection = "#504945"
 muted = "#665c54"

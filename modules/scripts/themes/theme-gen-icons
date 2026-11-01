@@ -1,0 +1,164 @@
+#!/usr/bin/env python3
+
+# ============================================================
+# theme-gen-icons <papirus-dir> <out-dir> <theme-name> <icon-color>
+#
+# Builds a palette's icon theme: the same theme Papirus-Dark has, with every
+# folder / user-home / inode-directory icon pointed at that palette's colour
+# variant instead of the default blue one.
+#
+# WHY ONE PYTHON PROCESS: the previous shell version did the same work with a
+# `grep | tr | grep | awk | head` pipeline per icon (twice) plus `readlink -f`
+# and `sed`, i.e. ~6 processes for each of ~1100 icons. Measured on this machine:
+# 21.3 s for a full icon set, which meant a theme switch against a cold cache
+# looked broken for 20 seconds before the new theme reached GTK. Doing it in one
+# interpreter is the same algorithm without the process spawns.
+#
+# What it does, per size directory (16x16, 22x22, ... scalable):
+#   1. if Papirus has the palette's colour variant of an icon, symlink to it;
+#   2. otherwise recolour the source SVG: Papirus ships a few families only in
+#      some colours (e.g. folder-bluegrey-public.svg), and skipping them let the
+#      icon fall back to Papirus-Dark's BLUE artwork - which is why one "public"
+#      folder used to show up blue in an otherwise brown theme. Each folder glyph
+#      carries exactly two paint colours (base + shade), so pairing them in order
+#      is enough and the glyph itself is preserved.
+#
+# Exit status: 0 when at least one icon was written, 1 otherwise. The caller
+# treats 1 as "keep the palette's packaged icon theme", which is why a failure
+# here can never leave the desktop without icons.
+# ============================================================
+
+import os
+import re
+import shutil
+import sys
+
+HEX = re.compile(r"#[0-9a-fA-F]{6}")
+IGNORED = {"#ffffff", "#e4e4e4"}
+
+
+def paint_colours(path, count=2):
+    """First `count` distinct non-white hexes of an SVG, lowercased (Papirus paint order)."""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            text = f.read()
+    except OSError:
+        return []
+    seen = []
+    for match in HEX.findall(text):
+        low = match.lower()
+        if low in IGNORED or low in seen:
+            continue
+        seen.append(low)
+        if len(seen) == count:
+            break
+    return seen
+
+
+def recolour(source, target, src_hexes, dst_hexes):
+    """Write `source` to `target` with src_hexes replaced by dst_hexes (case-insensitive)."""
+    with open(source, "r", encoding="utf-8", errors="replace") as f:
+        text = f.read()
+    for old, new in zip(src_hexes, dst_hexes):
+        text = re.sub(re.escape(old), new, text, flags=re.IGNORECASE)
+    with open(target, "w", encoding="utf-8") as f:
+        f.write(text)
+
+
+def main(argv):
+    if len(argv) != 5:
+        print("usage: theme-gen-icons <papirus-dir> <out-dir> <theme-name> <icon-colour>", file=sys.stderr)
+        return 2
+
+    papirus, out_dir, theme_name, colour = argv[1], argv[2], argv[3], argv[4]
+
+    if not os.path.isdir(papirus):
+        print("theme-gen-icons: %s is not a directory" % papirus, file=sys.stderr)
+        return 1
+
+    # index.theme first: without it the directory is not a theme at all.
+    index = os.path.join(papirus, "index.theme")
+    if os.path.isfile(index):
+        os.makedirs(out_dir, exist_ok=True)
+        shutil.copyfile(index, os.path.join(out_dir, "index.theme"))
+        path = os.path.join(out_dir, "index.theme")
+        with open(path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+        lines = [re.sub(r"^Name=.*$", "Name=%s" % theme_name, line) for line in lines]
+        if not any(line.startswith("Inherits=") for line in lines):
+            lines.append("Inherits=Papirus-Dark\n")
+        with open(path, "w", encoding="utf-8") as f:
+            f.writelines(lines)
+
+    symlinked = 0
+    recoloured = 0
+    failed = 0
+
+    for sizedir in sorted(os.listdir(papirus)):
+        places = os.path.join(papirus, sizedir, "places")
+        if not os.path.isdir(places):
+            continue
+
+        real = os.path.realpath(places)
+        if not os.path.isdir(real):
+            continue
+
+        target_dir = os.path.join(out_dir, sizedir, "places")
+        os.makedirs(target_dir, exist_ok=True)
+
+        for entry in sorted(os.listdir(real)):
+            source = os.path.join(real, entry)
+            if not os.path.islink(source) or not entry.endswith(".svg"):
+                continue
+
+            if entry == "folder.svg" or entry == "inode-directory.svg":
+                candidate = "folder-%s.svg" % colour
+            elif entry.startswith("folder-"):
+                candidate = "folder-%s-%s" % (colour, entry[len("folder-"):])
+            elif entry.startswith("user-"):
+                candidate = "user-%s-%s" % (colour, entry[len("user-"):])
+            else:
+                continue
+
+            try:
+                if os.path.exists(os.path.join(real, candidate)):
+                    dest = os.path.join(target_dir, entry)
+                    if os.path.islink(dest) or os.path.exists(dest):
+                        os.unlink(dest)
+                    os.symlink(os.path.join(real, candidate), dest)
+                    symlinked += 1
+                    continue
+
+                # No colour variant for this family: recolour the blue source instead.
+                family = entry[len("folder-"):].split("-")[0] if entry.startswith("folder-") else ""
+                if not family or family == colour:
+                    continue
+
+                generic_src = os.path.join(real, "folder-%s.svg" % family)
+                generic_dst = os.path.join(real, "folder-%s.svg" % colour)
+                if not (os.path.isfile(generic_src) and os.path.isfile(generic_dst)):
+                    continue
+
+                src_hexes = paint_colours(generic_src)
+                dst_hexes = paint_colours(generic_dst)
+                if len(src_hexes) != 2 or len(dst_hexes) != 2:
+                    continue
+
+                recolour(os.path.realpath(source), os.path.join(target_dir, entry), src_hexes, dst_hexes)
+                recoloured += 1
+            except OSError as error:
+                # One unwritable icon must not cost the whole theme.
+                print("theme-gen-icons: skipped %s (%s)" % (entry, error), file=sys.stderr)
+                failed += 1
+
+    total = symlinked + recoloured
+    print("theme-gen-icons: symlinks=%d recoloured=%d total=%d failed=%d" % (symlinked, recoloured, total, failed))
+
+    if total == 0:
+        shutil.rmtree(out_dir, ignore_errors=True)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
