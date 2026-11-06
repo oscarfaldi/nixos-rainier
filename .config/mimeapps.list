@@ -14,12 +14,24 @@ text/x-python=org.xfce.mousepad.desktop
 # =========================
 # Web
 # =========================
-text/html=chromium.desktop
-application/xhtml+xml=chromium.desktop
-x-scheme-handler/http=chromium.desktop
-x-scheme-handler/https=chromium.desktop
-x-scheme-handler/about=chromium.desktop
-x-scheme-handler/unknown=chromium.desktop
+# Edge's own desktop id. The previous value was chromium.desktop, which is not
+# installed on this machine, so every one of these entries pointed at nothing and
+# link clicks only worked because Edge registers itself at runtime.
+text/html=com.microsoft.Edge.desktop
+application/xhtml+xml=com.microsoft.Edge.desktop
+x-scheme-handler/http=com.microsoft.Edge.desktop
+x-scheme-handler/https=com.microsoft.Edge.desktop
+x-scheme-handler/about=com.microsoft.Edge.desktop
+x-scheme-handler/unknown=com.microsoft.Edge.desktop
+
+# =========================
+# Chat deep links
+# =========================
+# Without these the desktop resolves the scheme from the only .desktop file that
+# declares it, which works but is implicit. Declared, the mapping is visible here and
+# survives installing a second client that claims the same scheme.
+x-scheme-handler/tg=org.telegram.desktop.desktop
+x-scheme-handler/discord=discord.desktop
 
 # =========================
 # Images
