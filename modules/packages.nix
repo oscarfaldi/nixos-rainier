@@ -185,18 +185,20 @@
     # Messaging
     # ------------------------------------------------------------
 
+    # Only apps that have nothing to declare in $HOME live here. An app whose settings
+    # can be written declaratively gets its own home/<app>.nix file that owns BOTH the
+    # package and the config, so removing the app means deleting one file instead of
+    # hunting through this list as well. ZapZap is the current example of that.
+
     # Discord, official client. Its profile in ~/.config/discord carries the session
     # token, so session-backup snapshots it to the NAS and install restores it: a
     # reinstall opens already logged in, with no "verify this new device" email.
+    # No home/ module: Discord rewrites that profile itself and offers no config file.
     discord
 
-    # Telegram, official desktop client. tdata/ holds the login the same way.
+    # Telegram, official desktop client. tdata/ holds the login the same way, and it is
+    # binary app state rather than a config file, so there is nothing to declare either.
     telegram-desktop
-
-    # ZapZap (WhatsApp). The package lives here with the other clients; home/zapzap.nix
-    # keeps only the activation that seeds its settings file into $HOME, which is the
-    # one thing a system package cannot do.
-    zapzap
 
     # ------------------------------------------------------------
     # System Controls

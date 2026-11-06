@@ -9,11 +9,14 @@
   # Only the settings are seeded here. The account itself is a WhatsApp linked device
   # whose credentials live in ~/.local/share/ZapZap; ./install restores that directory
   # from the NAS before the first launch, so a reinstall does not need a new QR scan.
-  # The package itself is declared in modules/packages.nix with the other messaging
-  # clients. What stays here is the only part that has to run as the user inside $HOME:
-  # a one-time seed of the settings file. It is deliberately NOT home.file, because
-  # ZapZap rewrites that file on every exit and a store symlink would either break the
-  # write or be overwritten on each activation.
+  # The package lives HERE, not in modules/packages.nix, on purpose: one file owns the
+  # whole app, so deleting this file removes ZapZap completely - no second place to
+  # clean up. The same file seeds the settings below.
+  home.packages = [ pkgs.zapzap ];
+
+  # A one-time seed, deliberately NOT home.file: ZapZap rewrites this file on every exit,
+  # so a store symlink would either break that write or be restored over the app's own
+  # settings on each activation. Only created when it does not exist yet.
 
   home.activation.zapzapSeedSettings = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
     conf="$HOME/.config/ZapZap/ZapZap.conf"
