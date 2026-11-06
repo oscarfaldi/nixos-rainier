@@ -69,8 +69,12 @@ snapshot() {
     install -m 0600 "$stage/$tar.sha256" "$NAS_ROOT/$dest/$tar.sha256"
 
     # Which build produced the profile: a major jump is the one case where the
-    # restored session may not open and a fresh login is required.
-    readlink -f "$(command -v "$binary")" > "$NAS_ROOT/$dest/version.txt" 2>/dev/null || true
+    # restored session may not open and a fresh login is required. An app that is not
+    # on PATH yet (run once through `nix run`, or added before the rebuild) leaves the
+    # file alone instead of writing an empty one.
+    if path="$(command -v "$binary" 2>/dev/null)" && [ -n "$path" ]; then
+        readlink -f "$path" > "$NAS_ROOT/$dest/version.txt" 2>/dev/null || true
+    fi
 
     echo "OK   $label -> $NAS_ROOT/$dest/$tar ($(du -h "$stage/$tar" | cut -f1))"
     rm -rf "$stage"
@@ -88,8 +92,10 @@ snapshot "Discord" "$HOME/.config" "discord" "Discord" "discord-session.tar.gz" 
 # Telegram Desktop keeps the whole login in tdata/ (its own encrypted key material
 # included), so the archive is the session. The media cache inside tdata/user_data is
 # dropped: it is the bulk of the directory and Telegram rebuilds it.
+# The packaged binary is called `Telegram` (not telegram-desktop), so both the launcher
+# and the wrapped child match on `Telegram`.
 snapshot "Telegram" "$HOME/.local/share" "TelegramDesktop" "Telegram" "telegram-session.tar.gz" \
-    "[t]elegram-desktop" "telegram-desktop" \
+    "[T]elegram" "Telegram" \
     "TelegramDesktop/log.txt" \
     "TelegramDesktop/tdata/user_data/cache" "TelegramDesktop/tdata/user_data/media_cache"
 
