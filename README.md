@@ -60,6 +60,17 @@ For GUI editing, **Mousepad** can open files inside `~/System` without running i
 - Keep configuration deterministic.
 - If something requires an imperative step, document why.
 
+### `hardware-configuration.nix`
+
+This file is **generated, never hand-written**. `install` copies it out of `/etc/nixos` on every
+reinstall (`HW_CONFIG_SRC` in the script), so its partition UUIDs, boot partition and swap device
+always describe the machine that was just installed. A working copy that differs from the committed
+one after a reinstall is expected, not a mistake.
+
+- Never edit it by hand, and never treat a dirty copy as pending work: the next install replaces it.
+- It stays committed so a bare clone can build before any install has run - the next install
+  overwrites it with the real hardware of that machine.
+
 ## Installation
 
 ### 1. Install NixOS

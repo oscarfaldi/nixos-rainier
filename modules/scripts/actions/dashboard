@@ -15,8 +15,9 @@ plus path.
 Jellyfin, Navidrome, Unraid and qBittorrent all serve from the bare host
 10.10.10.10, so all four report the same app-id ("msedge-10.10.10.10__-Default")
 and no window-rule can tell them apart. This script tracks real window ids
-instead: it reuses the ids in the state file and only launches an app when its
-window is gone. It never closes or kills anything.
+instead: it reuses the ids in the state file, but only after the window behind that id still reports
+the app-id it had when the id was recorded, and it only launches an app when no window satisfies that.
+It never closes or kills anything.
 
 Windows that do not belong to a screen are left alone: same size, same
 workspace, still open. They end up to the right of the dashboard columns,
@@ -109,6 +110,15 @@ APPS = {
     # LocalSend: the same Exec= as its desktop entry. It is a normal toplevel here, not a floating
     # window - the dashboard owns its geometry like every other app on this screen.
     "localsend": ["localsend_app"],
+}
+
+# Permanent window identity for native single-instance clients. Their window
+# carries its own unique app-id, so the slot can be recognised without relying
+# on the cached id. Edge PWA windows must NOT be listed here: every PWA hosted
+# on the same host shares one app-id, and adopting one would steal another
+# slot's window.
+APP_IDS = {
+    "zapzap": "com.rtosta.zapzap",
 }
 
 # Move windows that are not part of a screen onto a side workspace, so every
@@ -270,11 +280,31 @@ def focused_window_id():
 
 
 def find_window(key, state, claimed):
-    """The cached window id for `key`, if that window is still open."""
-    live = {w["id"] for w in windows()}
+    """Resolve the live window id for `key`, or None.
+
+    Order of trust:
+    1. The cached id, but only when the window still reports the app-id recorded
+       at cache time. Niri re-uses ids across sessions, so a stale id can be
+       live and belong to a different window (measured: a rebooted session gave
+       the grafana cache id to a personal Edge window).
+    2. When the app has a unique own app-id (APP_IDS, native clients - not
+       Edge PWA windows, which share one app-id per host), adopt the first
+       unclaimed live window with that app-id. Relaunching a single-instance
+       client creates no window and may not even change focus, so without this
+       fallback the slot degrades to "no window came up" after every reboot.
+    """
+    live = windows()
     cached = state["windows"].get(key)
-    if cached in live and cached not in claimed:
-        return cached
+    recorded = state.get("apps", {}).get(key)
+    if cached is not None and cached not in claimed:
+        cached_win = next((w for w in live if w["id"] == cached), None)
+        if cached_win is not None and (recorded is None or recorded == cached_win.get("app_id")):
+            return cached
+    known = APP_IDS.get(key)
+    if known:
+        win = next((w for w in live if w.get("app_id") == known and w["id"] not in claimed), None)
+        if win is not None:
+            return win["id"]
     return None
 
 
@@ -287,14 +317,20 @@ def launch_window(key, claimed):
     """
     before = {w["id"] for w in windows()}
     focused_before = focused_window_id()
-    subprocess.Popen(
-        APPS[key],
-        env=ENV,
-        start_new_session=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        stdin=subprocess.DEVNULL,
-    )
+    try:
+        subprocess.Popen(
+            APPS[key],
+            env=ENV,
+            start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+        )
+    except OSError as exc:
+        # A binary missing from PATH must cost this one app, not the whole run: an uncaught error
+        # here aborts every screen after this one, silently.
+        print(f"  ! {key}: cannot launch {APPS[key][0]}: {exc}", file=sys.stderr)
+        return None
     deadline = time.time() + SPAWN_TIMEOUT
     while time.time() < deadline:
         time.sleep(0.3)
@@ -522,6 +558,11 @@ def build_screen(index, screen, state, claimed, allow_spawn=True):
     name = f"dash-{index}"
 
     # Skip when the screen still matches the last successful apply exactly.
+    #
+    # The app-id recorded for a slot is deliberately NOT back-filled from whatever window currently
+    # owns the cached id: after a reboot niri hands that id to a different window, and seeding the
+    # record from it validates the stale id for good - the exact failure APP_IDS exists to catch.
+    live_apps = {w["id"]: w.get("app_id") for w in windows()}
     expected = set()
     for column in screen["columns"]:
         for key, _ratio in column["windows"]:
@@ -557,6 +598,13 @@ def build_screen(index, screen, state, claimed, allow_spawn=True):
                 continue
             claimed.add(win)
             state["windows"][key] = win
+            # A window launched in this run did not exist when live_apps was taken, so read its
+            # app-id back from niri. Recording None would disable the check for this slot for good,
+            # because setdefault never overwrites it once it is there.
+            recorded = live_apps.get(win)
+            if recorded is None:
+                recorded = next((w.get("app_id") for w in windows() if w["id"] == win), None)
+            state.setdefault("apps", {})[key] = recorded
             act("move-window-to-workspace", name, "--window-id", str(win), "--focus", "false")
             slots.append((key, ratio, win))
         columns.append(dict(column, slots=slots))

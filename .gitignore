@@ -3,3 +3,6 @@ result-*
 
 # LibreOffice writes this at runtime (thumbnails, history, last-used paths).
 .config/libreoffice/
+
+# Python bytecode from running a script in place (they are installed as Nix wrappers).
+__pycache__/

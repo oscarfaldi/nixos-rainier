@@ -1424,6 +1424,19 @@ Same idea as the report dialogs: the script writes a file, the shell draws it. O
 4. `shell.qml` (`job` verb -> `showJob`) creates a `JobWindow` for that path, which polls the file
    every 250 ms plus `tail -n 5` of the log, and stops polling once the state is terminal.
 
+**One window per job, never one at a time** - `showJob` keeps a map keyed by the status path
+(`shellRoot.jobWindows`). A second `qs-job` while the first is still encoding gets its OWN card; the
+old version destroyed the previous window, so the first encode kept running with nothing on screen
+and no way to cancel it. The window emits `closeRequested()` on CLOSE/Escape and on a compositor
+close (`onClosed`, i.e. `Mod+X`), and the shell drops that path from the map and destroys the object
+then - a dead window left in the map would swallow the next `job <same path>` replay. Replaying a
+path that is still on screen raises the existing card instead of opening a clone.
+
+**Seeing them apart** - the title is `JOB_TITLE · <file>` so `niri msg windows` is readable when
+several cards run, and niri places each new floating window at its own position (measured:
+626,402 / 1404,539 / 172,564 for three cards) - no cascade code needed, but neighbouring cards can
+still overlap by ~120 px, so drag one if a log matters.
+
 **Status file** - `key=value`, rewritten atomically (`.tmp` + `mv`): `title`, `state`
 (`running|done|failed|cancelled`), `file`, `detail`, `percent`, `speed`, `eta`, `message`.
 

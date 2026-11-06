@@ -56,7 +56,7 @@ FloatingWindow {
 
     screen: Quickshell.screens.length > 0 ? Quickshell.screens[0] : null
     color: root.theme.panel
-    title: root.jobTitle !== "" ? root.jobTitle : root.initialTitle !== "" ? root.initialTitle : "Job"
+    title: (root.jobTitle !== "" ? root.jobTitle : root.initialTitle !== "" ? root.initialTitle : "Job") + (root.fileName !== "" ? " · " + root.fileName : "")
     visible: true
     width: 900
     height: 700
@@ -81,9 +81,18 @@ FloatingWindow {
         if (fields.message !== undefined) root.message = fields.message;
     }
 
+    // The shell owns this object: it keeps one window per status path and drops it from that map
+    // when the card closes, so a dead window never blocks the same job from showing again.
+    signal closeRequested()
+
     function closeWindow() {
         root.visible = false;
+        root.closeRequested();
     }
+
+    // Closing through the compositor (Mod+X, or a niri action) must take the same path, otherwise
+    // the shell keeps a window it believes is still on screen.
+    onClosed: root.closeRequested()
 
     function cancelJob() {
         if (root.finished) {

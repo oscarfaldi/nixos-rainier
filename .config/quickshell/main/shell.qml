@@ -112,22 +112,28 @@ Scope {
 
   property var reportWindows: ({})
 
-  // Live progress window for the conversion scripts. One at a time: a new job replaces whatever is
-  // on screen, created per request for the same lifecycle reason as the report dialogs below.
+  // Live progress windows for the conversion scripts. One PER JOB, never one at a time: two encodes
+  // started minutes apart are two different files with two different status paths, and the old
+  // single-slot version destroyed the first card when the second job started - while that first
+  // script kept encoding in the background with nothing on screen to cancel it. Keyed by status
+  // path, so a replayed `job <path>` brings the same card back instead of opening a second window
+  // polling the same file. Created per request for the same lifecycle reason as the report dialogs.
   Component {
     id: jobWindowComponent
 
     JobWindow { }
   }
 
-  property var jobWindow: null
+  property var jobWindows: ({})
 
   function showJob(path, title) {
-    if (shellRoot.jobWindow !== null) {
-      const previous = shellRoot.jobWindow
-      shellRoot.jobWindow = null
-      previous.visible = false
-      previous.destroy()
+    const existing = shellRoot.jobWindows[path]
+
+    if (existing !== undefined && existing !== null) {
+      // The same job again (a replay after the card was lost): reuse it, do not stack a clone.
+      existing.visible = true
+
+      return
     }
 
     const created = jobWindowComponent.createObject(null, { "statusPath": path, "initialTitle": title })
@@ -136,8 +142,21 @@ Scope {
       return
     }
 
-    created.statusPath = path
-    shellRoot.jobWindow = created
+    created.closeRequested.connect(function () { shellRoot.destroyJob(path) })
+    shellRoot.jobWindows[path] = created
+    shellRoot.jobWindows = Object.assign({}, shellRoot.jobWindows)
+  }
+
+  function destroyJob(path) {
+    const window = shellRoot.jobWindows[path]
+
+    if (window === undefined || window === null)
+      return
+
+    delete shellRoot.jobWindows[path]
+    shellRoot.jobWindows = Object.assign({}, shellRoot.jobWindows)
+    // Destroy outside the signal handler: `closed` can fire while the window is still unwinding.
+    Qt.callLater(function () { window.destroy() })
   }
 
   function showReport(kind, path) {
