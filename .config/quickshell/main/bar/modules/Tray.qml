@@ -91,22 +91,10 @@ Item {
 
           cursorShape: Qt.PointingHandCursor
 
-          // A MouseArea accepts ONLY the left button unless told otherwise, so the
-          // right- and middle-button branches below were unreachable: right-click fell
-          // through to "open the app" and the menu never appeared.
-          acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
-
           onClicked: {
-            // The menu belongs to the app, not to this bar: a StatusNotifierItem exposes
-            // it over com.canonical.dbusmenu, so the entries are whatever that app
-            // offers (Quit, Settings, Pause downloads, ...). Nothing is hardcoded here.
-            // A tray menu cannot be shown from this bar: every route ends in an
-            // xdg_popup that Wayland refuses to attach to a layer-shell surface
-            // ("Cannot attach popup ... as the popup is not an xdg_popup"). display()
-            // therefore logs and returns, QsMenuAnchor stays invisible, and a
-            // right-click that did nothing was the honest outcome. Until a shell-owned
-            // menu exists, a right-click does what a left-click does.
-            if (mouse.button === Qt.MiddleButton) {
+            if (mouse.button === Qt.RightButton && modelData.hasMenu) {
+              modelData.display(root, 0, root.height);
+            } else if (mouse.button === Qt.MiddleButton) {
               modelData.secondaryActivate();
             } else {
               modelData.activate();
