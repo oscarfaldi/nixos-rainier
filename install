@@ -85,6 +85,11 @@ DISCORD_REMOTE_DIR="Discord"
 DISCORD_TAR="discord-session.tar.gz"
 DISCORD_CONFIG_DIR="$HOME/.config/discord"
 
+# Telegram Desktop profile: tdata/ inside it is the login.
+TELEGRAM_REMOTE_DIR="Telegram"
+TELEGRAM_TAR="telegram-session.tar.gz"
+TELEGRAM_DATA_DIR="$HOME/.local/share/TelegramDesktop"
+
 # Local SSH identity.
 SSH_CONFIG_DIR="$HOME/.ssh"
 SSH_PRIVATE_KEY="$SSH_CONFIG_DIR/id_ed25519_cascade"
@@ -916,6 +921,8 @@ main() {
         "$ZAPZAP_REMOTE_DIR" "$ZAPZAP_TAR"
     bootstrap_session "Discord" "$DISCORD_CONFIG_DIR" "$HOME/.config" \
         "$DISCORD_REMOTE_DIR" "$DISCORD_TAR"
+    bootstrap_session "Telegram" "$TELEGRAM_DATA_DIR" "$HOME/.local/share" \
+        "$TELEGRAM_REMOTE_DIR" "$TELEGRAM_TAR"
     report_pinned_revision
     bootstrap_system
 

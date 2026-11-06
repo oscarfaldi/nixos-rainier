@@ -85,4 +85,12 @@ snapshot "Discord" "$HOME/.config" "discord" "Discord" "discord-session.tar.gz" 
     "discord/DawnGraphiteCache" "discord/DawnWebGPUCache" "discord/Crashpad" \
     "discord/discord_asset_cache" "discord/logs" "discord/sentry"
 
+# Telegram Desktop keeps the whole login in tdata/ (its own encrypted key material
+# included), so the archive is the session. The media cache inside tdata/user_data is
+# dropped: it is the bulk of the directory and Telegram rebuilds it.
+snapshot "Telegram" "$HOME/.local/share" "TelegramDesktop" "Telegram" "telegram-session.tar.gz" \
+    "[t]elegram-desktop" "telegram-desktop" \
+    "TelegramDesktop/log.txt" \
+    "TelegramDesktop/tdata/user_data/cache" "TelegramDesktop/tdata/user_data/media_cache"
+
 exit "$STATUS"

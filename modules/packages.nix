@@ -178,10 +178,20 @@
     libopenraw
     libgsf
 
-    discord
-
     grim
     slurp
+
+    # ------------------------------------------------------------
+    # Messaging
+    # ------------------------------------------------------------
+
+    # Discord, official client. Its profile in ~/.config/discord carries the session
+    # token, so session-backup snapshots it to the NAS and install restores it: a
+    # reinstall opens already logged in, with no "verify this new device" email.
+    discord
+
+    # Telegram, official desktop client. tdata/ holds the login the same way.
+    telegram-desktop
 
     # ------------------------------------------------------------
     # System Controls
