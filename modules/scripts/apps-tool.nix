@@ -19,5 +19,6 @@ in
     (mkScript "btop-launch")
     (mkScript "yazi-launch")
     (mkScript "zapzap-backup")
+    (mkScript "discord-backup")
   ];
 }

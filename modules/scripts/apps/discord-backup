@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+
+# Snapshot the Discord desktop profile to the NAS toolkit share.
+#
+# ~/.config/discord is not a preferences file. Local Storage/leveldb holds the
+# session token (the profile carries it on disk, not in a keyring: Local State has
+# no os_crypt key), and Cookies + Network Persistent State have to travel with it.
+# Discord treats a restored profile as the same client, so after a reinstall it
+# opens already logged in - no login, and therefore no "verify this new device"
+# email. Copying it while Discord runs captures a half-written leveldb and SQLite
+# database, so the app has to be closed first.
+#
+# Caches are excluded: they are ~45 MB of the 51 MB profile and are rebuilt on
+# the next launch.
+#
+# Treated like the SSH identity: the share is the trust boundary, and the file is
+# written with 0600.
+
+set -euo pipefail
+
+DATA="$HOME/.config/discord"
+DEST="/mnt/nas/toolkit/Discord"
+TAR="discord-session.tar.gz"
+
+if pgrep -f '[.]Discord-wrapped' >/dev/null; then
+    echo "Close Discord first: the profile must not be copied while it is open." >&2
+    exit 1
+fi
+
+if [[ ! -d "$DATA" ]]; then
+    echo "No Discord profile at $DATA" >&2
+    exit 1
+fi
+
+if [[ ! -d /mnt/nas/toolkit ]]; then
+    echo "The NAS toolkit share is not mounted at /mnt/nas/toolkit" >&2
+    exit 1
+fi
+
+STAGE="$(mktemp -d)"
+trap 'rm -rf "$STAGE"' EXIT
+
+tar -C "$HOME/.config" -czf "$STAGE/$TAR" \
+    --exclude='discord/Cache' \
+    --exclude='discord/Code Cache' \
+    --exclude='discord/GPUCache' \
+    --exclude='discord/DawnGraphiteCache' \
+    --exclude='discord/DawnWebGPUCache' \
+    --exclude='discord/Crashpad' \
+    --exclude='discord/discord_asset_cache' \
+    --exclude='discord/logs' \
+    --exclude='discord/sentry' \
+    discord
+
+( cd "$STAGE" && sha256sum "$TAR" > "$TAR.sha256" )
+
+mkdir -p "$DEST"
+install -m 0600 "$STAGE/$TAR" "$DEST/$TAR"
+install -m 0600 "$STAGE/$TAR.sha256" "$DEST/$TAR.sha256"
+
+# Record which build produced the profile; a major jump is the one case where the
+# restored session may be unreadable and a fresh login is required.
+readlink -f "$(command -v discord)" > "$DEST/version.txt" 2>/dev/null || true
+
+echo "Wrote $DEST/$TAR ($(du -h "$STAGE/$TAR" | cut -f1))"
