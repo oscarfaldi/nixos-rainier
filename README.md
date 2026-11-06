@@ -68,6 +68,9 @@ always describe the machine that was just installed. A working copy that differs
 one after a reinstall is expected, not a mistake.
 
 - Never edit it by hand, and never treat a dirty copy as pending work: the next install replaces it.
+- `install` also runs `git update-index --skip-worktree` on it, so a copy that differs after a
+  reinstall never shows up in `git status`. The file stays tracked - the flake has to see it - but
+  local changes to it are invisible to Git on purpose.
 - It stays committed so a bare clone can build before any install has run - the next install
   overwrites it with the real hardware of that machine.
 

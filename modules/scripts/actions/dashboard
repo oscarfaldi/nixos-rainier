@@ -118,7 +118,22 @@ APPS = {
 # on the same host shares one app-id, and adopting one would steal another
 # slot's window.
 APP_IDS = {
+    # Every app whose own app-id is unique on this machine. The four web apps used to share one
+    # app-id while they all served from the bare host 10.10.10.10; they now answer on their own
+    # hostnames, so each PWA has its own id and can be recognised the same way ZapZap is.
     "zapzap": "com.rtosta.zapzap",
+    "jellyfin": "msedge-movies.local__-Default",
+    "navidrome": "msedge-music.local__-Default",
+    "hermes": "msedge-hermes.local__-Default",
+    "gmail": "msedge-mail.google.com__-Default",
+    "unraid": "msedge-server.local__-Default",
+    "torrent": "msedge-torrent.local__-Default",
+    "grafana": "msedge-grafana.local__d_rYdddlPWk_node-exporter-full_-Default",
+    "localsend": "org.localsend.localsend_app",
+    # NOT here: btop. It runs inside ghostty, and every terminal window reports the same app-id
+    # (com.mitchellh.ghostty), so adopting "the ghostty window" would grab the user's own shell.
+    # Its slot keeps working off the cached id, which is enough for a terminal that never survives
+    # a reboot.
 }
 
 # Move windows that are not part of a screen onto a side workspace, so every
@@ -279,32 +294,51 @@ def focused_window_id():
     return None
 
 
+def app_id_of(window_id, known=None):
+    """app-id of a live window; `known` is a snapshot taken earlier in this run."""
+    if known is not None:
+        value = known.get(window_id)
+        if value is not None:
+            return value
+    return next((w.get("app_id") for w in windows() if w["id"] == window_id), None)
+
+
 def find_window(key, state, claimed):
-    """Resolve the live window id for `key`, or None.
+    """Resolve the live window id for this slot, or None.
 
     Order of trust:
-    1. The cached id, but only when the window still reports the app-id recorded
-       at cache time. Niri re-uses ids across sessions, so a stale id can be
-       live and belong to a different window (measured: a rebooted session gave
-       the grafana cache id to a personal Edge window).
-    2. When the app has a unique own app-id (APP_IDS, native clients - not
-       Edge PWA windows, which share one app-id per host), adopt the first
-       unclaimed live window with that app-id. Relaunching a single-instance
-       client creates no window and may not even change focus, so without this
-       fallback the slot degrades to "no window came up" after every reboot.
+    1. The cached id, but only when the window behind it still reports the app-id
+       recorded at cache time - and, when the slot knows its app-id, only when it
+       matches that too. Niri re-uses ids across sessions, so a stale id can be
+       live and belong to a totally different window: that is how a personal Edge
+       browser window was once dragged onto the dashboard monitor and placed in
+       the Gmail slot.
+    2. Adopt a live window that carries the slot's own app-id, but only when
+       exactly one such window is unclaimed. Zero means the app is not running;
+       two or more means the machine cannot tell which one belongs to the slot
+       (two Gmail app windows), and guessing there is what causes a hijack.
     """
     live = windows()
     cached = state["windows"].get(key)
     recorded = state.get("apps", {}).get(key)
+    expected = APP_IDS.get(key)
+
     if cached is not None and cached not in claimed:
         cached_win = next((w for w in live if w["id"] == cached), None)
-        if cached_win is not None and (recorded is None or recorded == cached_win.get("app_id")):
-            return cached
-    known = APP_IDS.get(key)
-    if known:
-        win = next((w for w in live if w.get("app_id") == known and w["id"] not in claimed), None)
-        if win is not None:
-            return win["id"]
+        if cached_win is not None:
+            actual = cached_win.get("app_id")
+            matches_record = recorded is None or recorded == actual
+            matches_expected = expected is None or expected == actual
+            if matches_record and matches_expected:
+                return cached
+
+    if expected is not None:
+        candidates = [w for w in live if w.get("app_id") == expected and w["id"] not in claimed]
+        if len(candidates) == 1:
+            return candidates[0]["id"]
+        if len(candidates) > 1:
+            print(f"  ! {key}: {len(candidates)} windows carry app-id {expected}, not guessing",
+                  file=sys.stderr)
     return None
 
 
@@ -331,14 +365,22 @@ def launch_window(key, claimed):
         # here aborts every screen after this one, silently.
         print(f"  ! {key}: cannot launch {APPS[key][0]}: {exc}", file=sys.stderr)
         return None
+    expected = APP_IDS.get(key)
     deadline = time.time() + SPAWN_TIMEOUT
     while time.time() < deadline:
         time.sleep(0.3)
         fresh = [w for w in windows() if w["id"] not in before and w["id"] not in claimed]
+        if expected is not None:
+            # Only a window that reports the slot's app-id counts. Anything else that happened to
+            # appear (a splash, a browser tab window) must never be adopted into the slot.
+            matching = [w for w in fresh if w.get("app_id") == expected]
+            if matching:
+                return matching[0]["id"]
+            continue
         if fresh:
             return fresh[0]["id"]
-        # Edge reuses an open PWA window instead of creating one; it focuses
-        # it, so a focus change to an unclaimed window means the app is up.
+        # For apps with no identifying app-id (btop in ghostty), a focus change to an unclaimed
+        # window is the only signal that the app came up.
         current = focused_window_id()
         if current and current != focused_before and current not in claimed:
             return current
@@ -596,15 +638,21 @@ def build_screen(index, screen, state, claimed, allow_spawn=True):
                     print(f"  ! {key}: no window came up, skipped", file=sys.stderr)
             if win is None:
                 continue
+            # Last line of defence before anything is moved: the window has to be the app this slot
+            # declares. This is the one check that keeps a personal browser window from being
+            # dragged onto the dashboard monitor by a stale id.
+            expected_app = APP_IDS.get(key)
+            actual_app = app_id_of(win, live_apps)
+            if expected_app is not None and actual_app != expected_app:
+                print(f"  ! {key}: refusing window {win} ({actual_app}), expected {expected_app}",
+                      file=sys.stderr)
+                continue
             claimed.add(win)
             state["windows"][key] = win
             # A window launched in this run did not exist when live_apps was taken, so read its
             # app-id back from niri. Recording None would disable the check for this slot for good,
             # because setdefault never overwrites it once it is there.
-            recorded = live_apps.get(win)
-            if recorded is None:
-                recorded = next((w.get("app_id") for w in windows() if w["id"] == win), None)
-            state.setdefault("apps", {})[key] = recorded
+            state.setdefault("apps", {})[key] = actual_app
             act("move-window-to-workspace", name, "--window-id", str(win), "--focus", "false")
             slots.append((key, ratio, win))
         columns.append(dict(column, slots=slots))

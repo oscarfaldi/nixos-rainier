@@ -194,6 +194,14 @@ prepare_hardware_for_flake() {
             "git -C \"$CONFIG_DIR\" add -N -- hardware-configuration.nix"
     fi
 
+    # Keep it out of `git status` from now on. This step rewrites the file on every reinstall, so a
+    # local copy that differs from the committed one is expected and is never work to commit.
+    # skip-worktree is an index flag only: the file stays tracked, the flake still sees it, and
+    # local edits to it stop being reported as pending changes.
+    if command -v git >/dev/null 2>&1; then
+        git -C "$CONFIG_DIR" update-index --skip-worktree hardware-configuration.nix
+    fi
+
     echo
     echo "✓ hardware-configuration.nix is visible to the flake."
 }
