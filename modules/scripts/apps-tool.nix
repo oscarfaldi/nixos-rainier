@@ -18,7 +18,6 @@ in
     (mkScript "davinci")
     (mkScript "btop-launch")
     (mkScript "yazi-launch")
-    (mkScript "zapzap-backup")
-    (mkScript "discord-backup")
+    (mkScript "session-backup")
   ];
 }

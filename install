@@ -714,11 +714,25 @@ Installation will continue normally."
 # ZapZap Session
 # ------------------------------------------------------------------------------
 
-bootstrap_zapzap_session() {
-    print_header "ZapZap Session Bootstrap"
 
-    if [[ -d "$ZAPZAP_DATA_DIR" && -n "$(ls -A "$ZAPZAP_DATA_DIR" 2>/dev/null)" ]]; then
-        echo "✓ Existing ZapZap data found."
+# Restore one app's session from the NAS toolkit share.
+#
+# The share is a passive repository: it only ever holds what `session-backup` wrote
+# there, and this is the only reader. Every app goes through the same rules:
+#   - a session already on disk always wins, so a live one is never overwritten
+#   - the archive is a credential, so the checksum next to it must pass when present
+#   - any failure is a warning; a missing session never fails the install
+bootstrap_session() {
+    local LABEL="$1"
+    local TARGET_DIR="$2"
+    local EXTRACT_PARENT="$3"
+    local REMOTE_DIR="$4"
+    local TAR="$5"
+
+    print_header "$LABEL Session Bootstrap"
+
+    if [[ -d "$TARGET_DIR" && -n "$(ls -A "$TARGET_DIR" 2>/dev/null)" ]]; then
+        echo "\u2713 Existing $LABEL session found."
         echo "  Skipping NAS restore."
         return 0
     fi
@@ -726,7 +740,7 @@ bootstrap_zapzap_session() {
     if [[ ! -f "$SMB_CRED_FILE" ]]; then
         print_warning \
             "SMB credentials are unavailable. \
-ZapZap session will not be restored from NAS."
+$LABEL session will not be restored from NAS."
         return 0
     fi
 
@@ -734,37 +748,35 @@ ZapZap session will not be restored from NAS."
     if ! TEMP_DIR="$(mktemp -d)"; then
         print_warning \
             "Could not create a temporary directory. \
-ZapZap session restore skipped."
+$LABEL session restore skipped."
         return 0
     fi
 
-    cleanup_zapzap_bootstrap() {
+    cleanup_session_bootstrap() {
         rm -rf "$TEMP_DIR"
     }
-    trap cleanup_zapzap_bootstrap RETURN
+    trap cleanup_session_bootstrap RETURN
 
-    echo "Attempting to restore the ZapZap session from NAS..."
+    echo "Attempting to restore the $LABEL session from NAS..."
     echo
     echo "  Share: $SMB_BOOTSTRAP_SHARE"
-    echo "  Path : $ZAPZAP_REMOTE_DIR/"
+    echo "  Path : $REMOTE_DIR/"
     echo
 
     local TEMP_CRED=""
     if ! TEMP_CRED="$(mktemp)"; then
         print_warning \
             "Could not create a temporary credentials file. \
-ZapZap session restore skipped."
+$LABEL session restore skipped."
         return 0
     fi
-
     if ! sudo cat "$SMB_CRED_FILE" > "$TEMP_CRED"; then
         rm -f "$TEMP_CRED"
         print_warning \
             "Could not read SMB credentials. \
-ZapZap session restore skipped."
+$LABEL session restore skipped."
         return 0
     fi
-
     chmod 600 "$TEMP_CRED"
 
     if ! nix-shell -p samba --run "
@@ -772,163 +784,55 @@ ZapZap session restore skipped."
             \"$SMB_BOOTSTRAP_SHARE\" \
             -A \"$TEMP_CRED\" \
             -c '
-                cd \"$ZAPZAP_REMOTE_DIR\";
-                get $ZAPZAP_TAR $TEMP_DIR/$ZAPZAP_TAR;
-                get $ZAPZAP_TAR.sha256 $TEMP_DIR/$ZAPZAP_TAR.sha256;
+                cd \"$REMOTE_DIR\";
+                get $TAR $TEMP_DIR/$TAR;
+                get $TAR.sha256 $TEMP_DIR/$TAR.sha256;
             '
     "
     then
         rm -f "$TEMP_CRED"
         print_warning \
-            "Could not connect to the NAS or retrieve the ZapZap session.
+            "Could not connect to the NAS or retrieve the $LABEL session.
 Installation will continue normally."
         return 0
     fi
-
     rm -f "$TEMP_CRED"
 
-    if [[ ! -s "$TEMP_DIR/$ZAPZAP_TAR" ]]; then
+    if [[ ! -s "$TEMP_DIR/$TAR" ]]; then
         print_warning \
-            "$ZAPZAP_TAR was not found on the NAS.
+            "$TAR was not found on the NAS.
 Installation will continue normally."
         return 0
     fi
 
     # A checksum next to the archive is optional, but when it exists it has to pass:
-    # this archive is a credential, not a preference file.
-    if [[ -s "$TEMP_DIR/$ZAPZAP_TAR.sha256" ]] \
-        && ! ( cd "$TEMP_DIR" && sha256sum -c "$ZAPZAP_TAR.sha256" >/dev/null 2>&1 )
+    # these archives are credentials, not preference files.
+    if [[ -s "$TEMP_DIR/$TAR.sha256" ]] \
+        && ! ( cd "$TEMP_DIR" && sha256sum -c "$TAR.sha256" >/dev/null 2>&1 )
     then
         print_warning \
-            "The ZapZap session archive failed its checksum.
+            "The $LABEL session archive failed its checksum.
 Installation will continue normally."
         return 0
     fi
 
-    if ! mkdir -p "$HOME/.local/share"; then
+    if ! mkdir -p "$EXTRACT_PARENT"; then
         print_warning \
-            "Could not create ~/.local/share.
+            "Could not create $EXTRACT_PARENT.
 Installation will continue normally."
         return 0
     fi
 
-    if ! tar -xzf "$TEMP_DIR/$ZAPZAP_TAR" -C "$HOME/.local/share"; then
+    if ! tar -xzf "$TEMP_DIR/$TAR" -C "$EXTRACT_PARENT"; then
         print_warning \
-            "Could not extract the ZapZap session.
+            "Could not extract the $LABEL session.
 Installation will continue normally."
         return 0
     fi
 
-    chmod -R u+rwX,go-rwx "$ZAPZAP_DATA_DIR" 2>/dev/null || true
+    chmod -R u+rwX,go-rwx "$TARGET_DIR" 2>/dev/null || true
 
-    echo "✓ ZapZap session restored."
-}
-
-bootstrap_discord_session() {
-    print_header "Discord Session Bootstrap"
-
-    if [[ -d "$DISCORD_CONFIG_DIR" && -n "$(ls -A "$DISCORD_CONFIG_DIR" 2>/dev/null)" ]]; then
-        echo "✓ Existing Discord profile found."
-        echo "  Skipping NAS restore."
-        return 0
-    fi
-
-    if [[ ! -f "$SMB_CRED_FILE" ]]; then
-        print_warning \
-            "SMB credentials are unavailable. \
-Discord session will not be restored from NAS."
-        return 0
-    fi
-
-    local TEMP_DIR
-    if ! TEMP_DIR="$(mktemp -d)"; then
-        print_warning \
-            "Could not create a temporary directory. \
-Discord session restore skipped."
-        return 0
-    fi
-
-    cleanup_discord_bootstrap() {
-        rm -rf "$TEMP_DIR"
-    }
-    trap cleanup_discord_bootstrap RETURN
-
-    echo "Attempting to restore the Discord session from NAS..."
-    echo
-    echo "  Share: $SMB_BOOTSTRAP_SHARE"
-    echo "  Path : $DISCORD_REMOTE_DIR/"
-    echo
-
-    local TEMP_CRED=""
-    if ! TEMP_CRED="$(mktemp)"; then
-        print_warning \
-            "Could not create a temporary credentials file. \
-Discord session restore skipped."
-        return 0
-    fi
-    if ! sudo cat "$SMB_CRED_FILE" > "$TEMP_CRED"; then
-        rm -f "$TEMP_CRED"
-        print_warning \
-            "Could not read SMB credentials. \
-Discord session restore skipped."
-        return 0
-    fi
-    chmod 600 "$TEMP_CRED"
-
-    if ! nix-shell -p samba --run "
-        smbclient -s /dev/null \
-            \"$SMB_BOOTSTRAP_SHARE\" \
-            -A \"$TEMP_CRED\" \
-            -c '
-                cd \"$DISCORD_REMOTE_DIR\";
-                get $DISCORD_TAR $TEMP_DIR/$DISCORD_TAR;
-                get $DISCORD_TAR.sha256 $TEMP_DIR/$DISCORD_TAR.sha256;
-            '
-    "
-    then
-        rm -f "$TEMP_CRED"
-        print_warning \
-            "Could not connect to the NAS or retrieve the Discord session.
-Installation will continue normally."
-        return 0
-    fi
-    rm -f "$TEMP_CRED"
-
-    if [[ ! -s "$TEMP_DIR/$DISCORD_TAR" ]]; then
-        print_warning \
-            "$DISCORD_TAR was not found on the NAS.
-Installation will continue normally."
-        return 0
-    fi
-
-    # The archive is a credential, not a preference file: when the checksum exists
-    # it has to pass.
-    if [[ -s "$TEMP_DIR/$DISCORD_TAR.sha256" ]] \
-        && ! ( cd "$TEMP_DIR" && sha256sum -c "$DISCORD_TAR.sha256" >/dev/null 2>&1 )
-    then
-        print_warning \
-            "The Discord session archive failed its checksum.
-Installation will continue normally."
-        return 0
-    fi
-
-    if ! mkdir -p "$HOME/.config"; then
-        print_warning \
-            "Could not create ~/.config.
-Installation will continue normally."
-        return 0
-    fi
-
-    if ! tar -xzf "$TEMP_DIR/$DISCORD_TAR" -C "$HOME/.config"; then
-        print_warning \
-            "Could not extract the Discord session.
-Installation will continue normally."
-        return 0
-    fi
-
-    chmod -R u+rwX,go-rwx "$DISCORD_CONFIG_DIR" 2>/dev/null || true
-
-    echo "✓ Discord session restored."
+    echo "\u2713 $LABEL session restored."
 }
 
 # ------------------------------------------------------------------------------
@@ -1008,8 +912,10 @@ main() {
     bootstrap_ssh_identity
     seed_github_host_key
     bootstrap_syncthing_identity
-    bootstrap_zapzap_session
-    bootstrap_discord_session
+    bootstrap_session "ZapZap" "$ZAPZAP_DATA_DIR" "$HOME/.local/share" \
+        "$ZAPZAP_REMOTE_DIR" "$ZAPZAP_TAR"
+    bootstrap_session "Discord" "$DISCORD_CONFIG_DIR" "$HOME/.config" \
+        "$DISCORD_REMOTE_DIR" "$DISCORD_TAR"
     report_pinned_revision
     bootstrap_system
 

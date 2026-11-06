@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+
+# Snapshot chat-app sessions to the NAS toolkit share.
+#
+# The share is a passive repository: nothing on the NAS runs, and the only reader is
+# `bootstrap_session` in install, which copies a session back on a fresh system.
+# This script is the only writer, and it has to run on the PC with the apps CLOSED:
+# these directories hold live SQLite/leveldb state, and copying them while the app
+# runs produces a profile that will not open afterwards.
+#
+# Layout on the share, one folder per app:
+#   toolkit/<App>/<app>-session.tar.gz  (+ .sha256 and version.txt), all 0600
+#
+# Adding an app is one line at the bottom. The fields are:
+#   label | parent to archive from | entry to archive | share folder | archive name |
+#   pgrep pattern for "it is running" | binary for version.txt | [tar excludes]
+
+set -uo pipefail
+
+NAS_ROOT="/mnt/nas/toolkit"
+STATUS=0
+
+if [[ ! -d "$NAS_ROOT" ]]; then
+    echo "The NAS toolkit share is not mounted at $NAS_ROOT" >&2
+    exit 1
+fi
+
+snapshot() {
+    local label="$1"
+    local parent="$2"
+    local dir="$3"
+    local dest="$4"
+    local tar="$5"
+    local proc="$6"
+    local binary="$7"
+    shift 7
+
+    local excludes=()
+    local pattern
+    for pattern in "$@"; do
+        excludes+=("--exclude=$pattern")
+    done
+
+    if pgrep -f "$proc" >/dev/null; then
+        echo "SKIP $label: it is running. Close it, then run session-backup again." >&2
+        STATUS=1
+        return 0
+    fi
+
+    if [[ ! -d "$parent/$dir" ]]; then
+        echo "SKIP $label: nothing to snapshot at $parent/$dir" >&2
+        return 0
+    fi
+
+    local stage
+    stage="$(mktemp -d)" || { STATUS=1; return 0; }
+
+    if ! tar -C "$parent" -czf "$stage/$tar" ${excludes[@]+"${excludes[@]}"} "$dir"; then
+        echo "FAILED $label: tar returned an error" >&2
+        STATUS=1
+        rm -rf "$stage"
+        return 0
+    fi
+
+    ( cd "$stage" && sha256sum "$tar" > "$tar.sha256" )
+
+    mkdir -p "$NAS_ROOT/$dest"
+    install -m 0600 "$stage/$tar" "$NAS_ROOT/$dest/$tar"
+    install -m 0600 "$stage/$tar.sha256" "$NAS_ROOT/$dest/$tar.sha256"
+
+    # Which build produced the profile: a major jump is the one case where the
+    # restored session may not open and a fresh login is required.
+    readlink -f "$(command -v "$binary")" > "$NAS_ROOT/$dest/version.txt" 2>/dev/null || true
+
+    echo "OK   $label -> $NAS_ROOT/$dest/$tar ($(du -h "$stage/$tar" | cut -f1))"
+    rm -rf "$stage"
+}
+
+snapshot "ZapZap" "$HOME/.local/share" "ZapZap" "ZapZap" "zapzap-session.tar.gz" \
+    "[.]zapzap-wrapped" "zapzap"
+
+snapshot "Discord" "$HOME/.config" "discord" "Discord" "discord-session.tar.gz" \
+    "[.]Discord-wrapped" "discord" \
+    "discord/Cache" "discord/Code Cache" "discord/GPUCache" \
+    "discord/DawnGraphiteCache" "discord/DawnWebGPUCache" "discord/Crashpad" \
+    "discord/discord_asset_cache" "discord/logs" "discord/sentry"
+
+exit "$STATUS"
