@@ -6,10 +6,10 @@
 # VinegarHQ) is only distributed as a Flathub package, so Flatpak is the only route.
 # Roblox Studio is a different product and is available natively as pkgs.vinegar.
 #
-# How it works: a oneshot unit adds the Flathub remote and installs
-# org.vinegarhq.Sober once. Flatpak ships its own .desktop file, so the app appears in
-# the launcher by itself. The unit re-runs on every boot but exits immediately once
-# Sober is installed, which makes a manual uninstall heal on the next reboot.
+# How it works: a oneshot unit adds the Flathub remote, installs org.vinegarhq.Sober once
+# and then keeps it updated (see updateSober below). Flatpak ships its own .desktop file,
+# so the app appears in the launcher by itself. The unit re-runs on every boot but skips
+# the install once Sober is present, which makes a manual uninstall heal on the next reboot.
 #
 # Removal:
 #   1. delete this file and its line in the configuration.nix imports list
@@ -20,6 +20,22 @@
 let
   flatpak = "${pkgs.flatpak}/bin/flatpak";
 
+  # Flathub ships REFRESHED Sober builds that keep the same version number: 1.8.0 was
+  # refreshed with a newer Roblox client tag, and Sober then refuses to start once Roblox
+  # requires that client - the message is "Sober is outdated". An install-once unit rots
+  # exactly that way, because nothing ever tells Flatpak to look again. Updating is
+  # Flatpak's own release channel, so the flake is not involved and no version is pinned
+  # here on purpose.
+  updateSober = pkgs.writeShellScript "flatpak-update-sober" ''
+    set -eu
+
+    ${flatpak} remote-add --system --if-not-exists flathub \
+      https://dl.flathub.org/repo/flathub.flatpakrepo
+
+    ${flatpak} update --system --noninteractive -y org.vinegarhq.Sober || \
+      echo "Sober update skipped (offline, or nothing to update)."
+  '';
+
   installSober = pkgs.writeShellScript "flatpak-install-sober" ''
     set -eu
 
@@ -28,10 +44,11 @@ let
 
     if ${flatpak} info --system org.vinegarhq.Sober >/dev/null 2>&1; then
       echo "Sober is already installed."
-      exit 0
+    else
+      ${flatpak} install --system --noninteractive -y flathub org.vinegarhq.Sober
     fi
 
-    ${flatpak} install --system --noninteractive -y flathub org.vinegarhq.Sober
+    ${updateSober}
   '';
 in
 
@@ -61,6 +78,32 @@ in
       # the first install pulls ~1.5 GB, never let the default 90s timeout kill it
       TimeoutStartSec = "infinity";
       ExecStart = installSober;
+    };
+  };
+
+  # A boot-only update is not enough: this machine stays up for days, so the app goes
+  # stale while it is running. Daily, Persistent so a missed run happens at the next
+  # boot, plus a delay so it does not race the network at login.
+  systemd.services.flatpak-update-sober = {
+    description = "Update Roblox (Sober) from Flathub";
+    wants = [ "network-online.target" ];
+    after = [ "network-online.target" ];
+
+    serviceConfig = {
+      Type = "oneshot";
+      TimeoutStartSec = "infinity";
+      ExecStart = updateSober;
+    };
+  };
+
+  systemd.timers.flatpak-update-sober = {
+    description = "Daily Roblox (Sober) update from Flathub";
+    wantedBy = [ "timers.target" ];
+
+    timerConfig = {
+      OnCalendar = "daily";
+      Persistent = true;
+      RandomizedDelaySec = "1h";
     };
   };
 }
