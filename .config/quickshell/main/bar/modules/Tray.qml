@@ -91,8 +91,20 @@ Item {
 
           cursorShape: Qt.PointingHandCursor
 
+          // A MouseArea accepts ONLY the left button unless told otherwise, so the
+          // right- and middle-button branches below were unreachable: right-click fell
+          // through to "open the app" and the menu never appeared.
+          acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
+
           onClicked: {
+            // The menu belongs to the app, not to this bar: a StatusNotifierItem exposes
+            // it over com.canonical.dbusmenu, so the entries are whatever that app
+            // offers (Quit, Settings, Pause downloads, ...). Nothing is hardcoded here.
             if (mouse.button === Qt.RightButton && modelData.hasMenu) {
+              modelData.display(root, 0, root.height);
+            } else if (modelData.onlyMenu && modelData.hasMenu) {
+              // Items with no "activate" action exist only as a menu: a plain click
+              // opens it instead of doing nothing.
               modelData.display(root, 0, root.height);
             } else if (mouse.button === Qt.MiddleButton) {
               modelData.secondaryActivate();
