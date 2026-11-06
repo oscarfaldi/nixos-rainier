@@ -193,6 +193,11 @@
     # Telegram, official desktop client. tdata/ holds the login the same way.
     telegram-desktop
 
+    # ZapZap (WhatsApp). The package lives here with the other clients; home/zapzap.nix
+    # keeps only the activation that seeds its settings file into $HOME, which is the
+    # one thing a system package cannot do.
+    zapzap
+
     # ------------------------------------------------------------
     # System Controls
     # ------------------------------------------------------------
