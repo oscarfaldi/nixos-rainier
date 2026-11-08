@@ -96,6 +96,16 @@ SPOTIFY_REMOTE_DIR="Spotify"
 SPOTIFY_TAR="spotify-session.tar.gz"
 SPOTIFY_CONFIG_DIR="$HOME/.config/spotify"
 
+# Edge profile and the login keyring it depends on: Chromium encrypts the cookie jar and
+# Login Data with a secret stored in the keyring, so a profile restored without it opens
+# with every password unreadable.
+EDGE_REMOTE_DIR="Edge"
+EDGE_TAR="edge-session.tar.gz"
+EDGE_CONFIG_DIR="$HOME/.config/microsoft-edge"
+KEYRING_REMOTE_DIR="Keyring"
+KEYRING_TAR="keyring-session.tar.gz"
+KEYRING_DIR="$HOME/.local/share/keyrings"
+
 # Local SSH identity.
 SSH_CONFIG_DIR="$HOME/.ssh"
 SSH_PRIVATE_KEY="$SSH_CONFIG_DIR/id_ed25519_cascade"
@@ -931,6 +941,10 @@ main() {
         "$TELEGRAM_REMOTE_DIR" "$TELEGRAM_TAR"
     bootstrap_session "Spotify" "$SPOTIFY_CONFIG_DIR" "$HOME/.config" \
         "$SPOTIFY_REMOTE_DIR" "$SPOTIFY_TAR"
+    bootstrap_session "Keyring" "$KEYRING_DIR" "$HOME/.local/share" \
+        "$KEYRING_REMOTE_DIR" "$KEYRING_TAR"
+    bootstrap_session "Edge" "$EDGE_CONFIG_DIR" "$HOME/.config" \
+        "$EDGE_REMOTE_DIR" "$EDGE_TAR"
     report_pinned_revision
     bootstrap_system
 

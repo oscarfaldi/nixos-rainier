@@ -14,6 +14,9 @@
 # Adding an app is one line at the bottom. The fields are:
 #   label | parent to archive from | entry to archive | share folder | archive name |
 #   pgrep pattern for "it is running" | binary for version.txt | [tar excludes]
+#
+# A proc pattern of "-" disables the running check. Only the keyring uses it: the daemon
+# is always up, and its files are small enough to copy while it idles.
 
 set -uo pipefail
 
@@ -41,7 +44,7 @@ snapshot() {
         excludes+=("--exclude=$pattern")
     done
 
-    if pgrep -f "$proc" >/dev/null; then
+    if [ "$proc" != "-" ] && pgrep -f "$proc" >/dev/null; then
         echo "SKIP $label: it is running. Close it, then run session-backup again." >&2
         STATUS=1
         return 0
@@ -107,5 +110,36 @@ snapshot "Telegram" "$HOME/.local/share" "TelegramDesktop" "Telegram" "telegram-
 # saver, not a guarantee, and expect a re-login if it fails to unlock.
 snapshot "Spotify" "$HOME/.config" "spotify" "Spotify" "spotify-session.tar.gz" \
     "[s]potify" "spotify"
+
+# Edge Sync already restores bookmarks, saved passwords and history from the Microsoft
+# account, so the profile is only archived for what sync cannot carry: the cookie jar
+# (site sessions, and the Spotify hand-off the desktop app uses), first-run state, and
+# per-extension settings. Extensions themselves are dropped - 800M of unpacked store
+# builds that sync reinstalls on the next launch - along with every cache.
+snapshot "Edge" "$HOME/.config" "microsoft-edge" "Edge" "edge-session.tar.gz" \
+    "[m]icrosoft-edge" "microsoft-edge" \
+    "microsoft-edge/Default/Extensions" \
+    "microsoft-edge/Default/Service Worker" \
+    "microsoft-edge/Default/IndexedDB" \
+    "microsoft-edge/Default/Cache" \
+    "microsoft-edge/Default/Code Cache" \
+    "microsoft-edge/Default/GPUCache" \
+    "microsoft-edge/Default/DawnGraphiteCache" \
+    "microsoft-edge/Default/DawnWebGPUCache" \
+    "microsoft-edge/Default/load_statistics.db" \
+    "microsoft-edge/GPUPersistentCache" \
+    "microsoft-edge/component_crx_cache" \
+    "microsoft-edge/extensions_crx_cache" \
+    "microsoft-edge/BrowserMetrics" \
+    "microsoft-edge/Crash Reports" \
+    "microsoft-edge/WidevineCdm"
+
+# The login keyring is where Chromium keeps the "Chromium Safe Storage" secret, and Edge
+# encrypts both the cookie jar and Login Data with it. Restoring the profile without this
+# file gives a browser whose passwords and sessions cannot be decrypted, so the two
+# archives only make sense as a pair. It also unlocks with the login password, which means
+# a reinstall that sets a different password cannot use the restored copy.
+snapshot "Keyring" "$HOME/.local/share" "keyrings" "Keyring" "keyring-session.tar.gz" \
+    "-" "-"
 
 exit "$STATUS"
