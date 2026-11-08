@@ -68,11 +68,13 @@ SCREENS = [
         ],
     },
     {
-        # screen 3: Jellyfin on top, Navidrome below (40/60)
+        # screen 3: Jellyfin on top, Navidrome in the middle, Spotify at the bottom
+        # (25/37.5/37.5). Jellyfin gets the smallest share because its web UI is the one
+        # that still reads fine at 640px on this monitor; the other two want room.
         "output": MON_VERTICAL,
         "workspace": 3,
         "columns": [
-            {"width": 1.00, "windows": [("jellyfin", 0.40), ("navidrome", 0.60)]},
+            {"width": 1.00, "windows": [("jellyfin", 0.25), ("navidrome", 0.375), ("spotify", 0.375)]},
         ],
     },
     {
@@ -110,6 +112,9 @@ APPS = {
     # LocalSend: the same Exec= as its desktop entry. It is a normal toplevel here, not a floating
     # window - the dashboard owns its geometry like every other app on this screen.
     "localsend": ["localsend_app"],
+    # Spotify is the patched native client from flake.nix, not a PWA: it opens its own
+    # window with a stable app-id instead of borrowing Edge's.
+    "spotify": ["spotify"],
 }
 
 # Permanent window identity for native single-instance clients. Their window
@@ -130,6 +135,7 @@ APP_IDS = {
     "torrent": "msedge-torrent.local__-Default",
     "grafana": "msedge-grafana.local__d_rYdddlPWk_node-exporter-full_-Default",
     "localsend": "org.localsend.localsend_app",
+    "spotify": "spotify",
     # NOT here: btop. It runs inside ghostty, and every terminal window reports the same app-id
     # (com.mitchellh.ghostty), so adopting "the ghostty window" would grab the user's own shell.
     # Its slot keeps working off the cached id, which is enough for a terminal that never survives
@@ -614,10 +620,16 @@ def build_screen(index, screen, state, claimed, allow_spawn=True):
             expected.add(wid)
     if len(expected) == sum(len(c["windows"]) for c in screen["columns"]):
         cached = state["layout"].get(name)
+        # fingerprint() only sees the windows that are already ON this workspace, so a slot
+        # whose window drifted to another workspace would be compared away and the screen
+        # would look finished. One entry per expected window is what turns that into a rebuild.
+        snap = fingerprint(name, expected)
         if (
             isinstance(cached, dict)
             and cached.get("spec") == spec_hash(screen)
-            and fingerprint(name, expected) == cached.get("snap")
+            and snap is not None
+            and len(snap) == len(expected)
+            and snap == cached.get("snap")
         ):
             claimed.update(expected)
             print(f"screen {index}: {name} already in place")
@@ -685,12 +697,15 @@ def build_screen(index, screen, state, claimed, allow_spawn=True):
         if not slots:
             continue
         act("focus-window", "--id", str(slots[0][2]))
-        act("set-column-width", f"{round(column['width'] * 100)}%")
+        act("set-column-width", f"{column['width'] * 100:g}%")
         for _, ratio, win in slots:
             if len(slots) == 1:
                 act("reset-window-height", "--id", str(win))
             else:
-                act("set-window-height", "--id", str(win), f"{round(ratio * 100)}%")
+                # :g keeps a real fraction (37.5%) instead of rounding it into 38%, which
+                # is what lets a column add up to exactly 100%. niri parses decimal
+                # percentages; the old round() silently turned 25/37.5/37.5 into 25/38/38.
+                act("set-window-height", "--id", str(win), f"{ratio * 100:g}%")
 
     if PARK_FOREIGN_WINDOWS:
         park_foreign_windows(name, {win for (_, _, win) in placed}, screen["output"])
