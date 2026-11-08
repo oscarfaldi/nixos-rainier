@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Snapshot chat-app sessions to the NAS toolkit share.
+# Snapshot app sessions and identities to the NAS toolkit share.
 #
 # The share is a passive repository: nothing on the NAS runs, and the only reader is
 # `bootstrap_session` in install, which copies a session back on a fresh system.
@@ -9,7 +9,7 @@
 # runs produces a profile that will not open afterwards.
 #
 # Layout on the share, one folder per app:
-#   toolkit/<App>/<app>-session.tar.gz  (+ .sha256 and version.txt), all 0600
+#   toolkit/Credentials/<App>/<app>-session.tar.gz  (+ .sha256 and version.txt), all 0600
 #
 # Adding an app is one line at the bottom. The fields are:
 #   label | parent to archive from | entry to archive | share folder | archive name |
@@ -20,13 +20,29 @@
 
 set -uo pipefail
 
-NAS_ROOT="/mnt/nas/toolkit"
+TOOLKIT_ROOT="/mnt/nas/toolkit"
+
+# Everything that is a credential lives under one folder. The share itself stays a
+# general toolkit - ISOs, drivers, installers - so SSH keys and browser sessions do not
+# end up sitting next to a Photoshop crack. `install` reads the exact same path; if it
+# ever moves again, both files have to change together.
+CREDENTIALS_ROOT="$TOOLKIT_ROOT/Credentials"
+
 STATUS=0
 
-if [[ ! -d "$NAS_ROOT" ]]; then
-    echo "The NAS toolkit share is not mounted at $NAS_ROOT" >&2
+if [[ ! -d "$TOOLKIT_ROOT" ]]; then
+    echo "The NAS toolkit share is not mounted at $TOOLKIT_ROOT" >&2
     exit 1
 fi
+
+# Refuse to fall back to the share root: a snapshot written one level up is a snapshot
+# `install` will never find, and nothing would report the mistake.
+if ! mkdir -p "$CREDENTIALS_ROOT" 2>/dev/null || [[ ! -w "$CREDENTIALS_ROOT" ]]; then
+    echo "Cannot write to $CREDENTIALS_ROOT - nothing was snapshotted" >&2
+    exit 1
+fi
+
+NAS_ROOT="$CREDENTIALS_ROOT"
 
 snapshot() {
     local label="$1"

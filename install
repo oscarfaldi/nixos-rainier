@@ -70,6 +70,11 @@ SMB_CRED_FILE="/etc/smb-credentials"
 # NAS SMB share used ONLY for direct bootstrap access.
 # No filesystem mount is created.
 SMB_BOOTSTRAP_SHARE="//10.10.10.10/toolkit"
+
+# Every credential archive and key pair lives one level down, so the share root can keep
+# holding ISOs and drivers. session-backup writes to the same folder; change both or the
+# restore reads an empty directory and the install reports a missing session.
+SMB_CREDENTIALS_DIR="Credentials"
 SYNCTHING_REMOTE_DIR="Syncthing"
 SSH_REMOTE_DIR="SSH"
 
@@ -337,7 +342,7 @@ SSH identity restore skipped."
     echo "Attempting to restore SSH identity from NAS..."
     echo
     echo "  Share: $SMB_BOOTSTRAP_SHARE"
-    echo "  Path : $SSH_REMOTE_DIR/"
+    echo "  Path : $SMB_CREDENTIALS_DIR/$SSH_REMOTE_DIR/"
     echo
 
     # /etc/smb-credentials is root-only (0600), but smbclient runs as the
@@ -365,7 +370,7 @@ SSH identity restore skipped."
             \"$SMB_BOOTSTRAP_SHARE\" \
             -A \"$TEMP_CRED\" \
             -c '
-                cd \"$SSH_REMOTE_DIR\";
+                cd \"$SMB_CREDENTIALS_DIR/$SSH_REMOTE_DIR\";
                 get id_ed25519_cascade $TEMP_DIR/id_ed25519_cascade;
                 get id_ed25519_cascade.pub $TEMP_DIR/id_ed25519_cascade.pub;
             '
@@ -458,14 +463,14 @@ Installation will continue normally."
     if [[ ! -s "$SSH_CONFIG_DIR/id_ed25519_github" ]]; then
         if ssh -i "$SSH_PRIVATE_KEY" -o IdentitiesOnly=yes -o BatchMode=yes \
                -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
-               root@10.10.10.10 'cat /mnt/user/toolkit/SSH/id_ed25519_github' \
+               root@10.10.10.10 'cat /mnt/user/toolkit/Credentials/SSH/id_ed25519_github' \
                > "$TEMP_DIR/id_ed25519_github" 2>/dev/null \
            && [[ -s "$TEMP_DIR/id_ed25519_github" ]]; then
             install -m 0600 "$TEMP_DIR/id_ed25519_github" "$SSH_CONFIG_DIR/id_ed25519_github"
             ssh -i "$SSH_PRIVATE_KEY" -o IdentitiesOnly=yes -o BatchMode=yes \
                 -o StrictHostKeyChecking=accept-new \
                 -o ConnectTimeout=10 root@10.10.10.10 \
-                'cat /mnt/user/toolkit/SSH/id_ed25519_github.pub' \
+                'cat /mnt/user/toolkit/Credentials/SSH/id_ed25519_github.pub' \
                 > "$SSH_CONFIG_DIR/id_ed25519_github.pub" 2>/dev/null || true
             if [[ -s "$SSH_CONFIG_DIR/id_ed25519_github.pub" ]]; then
                 chmod 644 "$SSH_CONFIG_DIR/id_ed25519_github.pub"
@@ -612,7 +617,7 @@ Syncthing identity restore skipped."
     echo "Attempting to restore Syncthing identity from NAS..."
     echo
     echo "  Share: $SMB_BOOTSTRAP_SHARE"
-    echo "  Path : $SYNCTHING_REMOTE_DIR/"
+    echo "  Path : $SMB_CREDENTIALS_DIR/$SYNCTHING_REMOTE_DIR/"
     echo
 
     # /etc/smb-credentials is root-only (0600), but smbclient runs as the
@@ -638,7 +643,7 @@ Syncthing identity restore skipped."
             \"$SMB_BOOTSTRAP_SHARE\" \
             -A \"$TEMP_CRED\" \
             -c '
-                cd \"$SYNCTHING_REMOTE_DIR\";
+                cd \"$SMB_CREDENTIALS_DIR/$SYNCTHING_REMOTE_DIR\";
                 get cert.pem $TEMP_DIR/cert.pem;
                 get key.pem $TEMP_DIR/key.pem;
             '
@@ -781,7 +786,7 @@ $LABEL session restore skipped."
     echo "Attempting to restore the $LABEL session from NAS..."
     echo
     echo "  Share: $SMB_BOOTSTRAP_SHARE"
-    echo "  Path : $REMOTE_DIR/"
+    echo "  Path : $SMB_CREDENTIALS_DIR/$REMOTE_DIR/"
     echo
 
     local TEMP_CRED=""
@@ -805,7 +810,7 @@ $LABEL session restore skipped."
             \"$SMB_BOOTSTRAP_SHARE\" \
             -A \"$TEMP_CRED\" \
             -c '
-                cd \"$REMOTE_DIR\";
+                cd \"$SMB_CREDENTIALS_DIR/$REMOTE_DIR\";
                 get $TAR $TEMP_DIR/$TAR;
                 get $TAR.sha256 $TEMP_DIR/$TAR.sha256;
             '
