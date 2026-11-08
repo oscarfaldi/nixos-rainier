@@ -14,6 +14,7 @@
     ./ssh.nix
     ./git.nix
     ./zapzap.nix
+    ./spotify.nix
   ];
 
   home.username = osConfig.my.username;

@@ -90,6 +90,12 @@ TELEGRAM_REMOTE_DIR="Telegram"
 TELEGRAM_TAR="telegram-session.tar.gz"
 TELEGRAM_DATA_DIR="$HOME/.local/share/TelegramDesktop"
 
+# Spotify profile. The login is the autologin.blob entry in prefs; that blob is a live
+# credential, which is why it goes to the NAS share and never into the repo.
+SPOTIFY_REMOTE_DIR="Spotify"
+SPOTIFY_TAR="spotify-session.tar.gz"
+SPOTIFY_CONFIG_DIR="$HOME/.config/spotify"
+
 # Local SSH identity.
 SSH_CONFIG_DIR="$HOME/.ssh"
 SSH_PRIVATE_KEY="$SSH_CONFIG_DIR/id_ed25519_cascade"
@@ -923,6 +929,8 @@ main() {
         "$DISCORD_REMOTE_DIR" "$DISCORD_TAR"
     bootstrap_session "Telegram" "$TELEGRAM_DATA_DIR" "$HOME/.local/share" \
         "$TELEGRAM_REMOTE_DIR" "$TELEGRAM_TAR"
+    bootstrap_session "Spotify" "$SPOTIFY_CONFIG_DIR" "$HOME/.config" \
+        "$SPOTIFY_REMOTE_DIR" "$SPOTIFY_TAR"
     report_pinned_revision
     bootstrap_system
 

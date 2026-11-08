@@ -99,4 +99,13 @@ snapshot "Telegram" "$HOME/.local/share" "TelegramDesktop" "Telegram" "telegram-
     "TelegramDesktop/log.txt" \
     "TelegramDesktop/tdata/user_data/cache" "TelegramDesktop/tdata/user_data/media_cache"
 
+# Spotify's login is the autologin.blob entry inside the profile-level prefs file, not
+# the per-account directory: Users/<name>-user only holds preferences and playback state.
+# The whole directory is 36K, so it is archived as-is and the cache stays out of it
+# because Spotify keeps that under ~/.cache. The blob is encrypted, but whether it
+# survives a restore onto a freshly installed system is unproven - treat it as a time
+# saver, not a guarantee, and expect a re-login if it fails to unlock.
+snapshot "Spotify" "$HOME/.config" "spotify" "Spotify" "spotify-session.tar.gz" \
+    "[s]potify" "spotify"
+
 exit "$STATUS"
