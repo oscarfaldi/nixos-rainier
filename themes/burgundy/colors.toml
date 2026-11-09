@@ -1,0 +1,61 @@
+# Burgundy - deep wine surfaces, champagne gold as the one light counterweight.
+#
+# Built from his own red ramp (#67001a -> #ff0040) but NOT at its saturation: those seven hexes are
+# 100% saturated and a wall of them hurts his eyes. Every role here keeps the Lab L* of the matching
+# role in rolex and only moves the hue to burgundy (~348), with chroma pulled well under rolex for
+# body text, cards and the semantic colours, and pushed slightly over it for the accent and the
+# window border (a red at rolex's accent chroma reads mauve rather than wine).
+#
+# Measured: body text 6.17:1 on the Thunar surface #5e3a3f, accent chroma 30.9 (rolex 22.2),
+# foreground chroma 4.4 (rolex 12.9). The surfaces mirror rolex's luminance ladder, so GTK apps
+# and the file manager land on the same depth as the palette he already uses.
+display_name = "Burgundy"
+
+gtk_theme = "Adwaita-dark"      # fallback only: the theme below is generated
+gtk_icons = "Papirus-Dark"      # fallback only: the icons below are generated
+
+generate_gtk = "true"
+gtk_base = "Nordic"
+generate_icons = "true"
+icons_color = "carmine"         # Papirus' deep-red folders: visible against wine without glowing
+
+# Popup/menu surface: lifted so a menu never reads as the near-black background.
+panel = "#3d1017"
+
+mode = "dark"
+
+# Popup borders and the shell accent: wine, chroma kept low enough that a 2px line does not glare.
+accent = "#a45d68"
+gtk_accent = "#a45d68"         # collapse Nordic's cool leftovers (blue links/selection) into wine
+selection = "#563035"
+muted = "#745459"
+
+background = "#1c0509"
+dark_background = "#130205"
+darker_background = "#100205"
+lighter_background = "#2f1015"
+
+foreground = "#eee2e4"
+dark_foreground = "#8b8183"
+light_foreground = "#d6cbcd"
+bright_foreground = "#f8f1f2"
+
+red = "#cc787f"
+yellow = "#cba861"
+orange = "#c28b6a"
+green = "#97b99e"
+cyan = "#d48c9e"
+blue = "#8699b1"
+magenta = "#ab889f"
+brown = "#896954"
+
+bright_red = "#da949a"
+bright_yellow = "#dec084"
+bright_green = "#b1cdb7"
+bright_cyan = "#f0afbf"
+bright_blue = "#a3b3c9"
+bright_magenta = "#c3a4b8"
+
+# Window borders: focused reads lighter and a touch stronger, unfocused stays quiet.
+border_active = "#b76c77"
+border_inactive = "#6c3f45"
