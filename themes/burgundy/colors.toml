@@ -17,7 +17,10 @@ gtk_icons = "Papirus-Dark"      # fallback only: the icons below are generated
 generate_gtk = "true"
 gtk_base = "Nordic"
 generate_icons = "true"
-icons_color = "carmine"         # Papirus' deep-red folders: visible against wine without glowing
+# Papirus folder tone. carmine (#a30002) matched the hue but is chroma 74 on a surface of chroma 15:
+# a wall of saturated red next to the wine surfaces, which is exactly what he flagged as "terlalu
+# mencolok". brown (#ae8e6c, chroma 24) keeps the folders visible without competing with the accent.
+icons_color = "brown"
 
 # Popup/menu surface: lifted so a menu never reads as the near-black background.
 panel = "#3d1017"
