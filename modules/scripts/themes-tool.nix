@@ -121,5 +121,8 @@ in
     (mkPython "theme-gen-icons")
     # derives the starship prompt palette from a palette (called by theme-apply)
     (mkPython "theme-prompt-palette")
+    # writes the Obsidian colour snippet, taking its surfaces from the GTK theme Thunar paints
+    # (called by theme-apply after the GTK theme is resolved)
+    (mkPython "theme-obsidian")
   ] ++ lib.optional (generatedThemePaths != [ ]) generatedThemes;
 }

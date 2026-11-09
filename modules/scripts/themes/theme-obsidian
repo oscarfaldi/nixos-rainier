@@ -1,0 +1,523 @@
+#!/usr/bin/env python3
+
+# ============================================================
+# theme-obsidian <colors.toml> [gtk-theme-dir]
+#
+# Writes the Obsidian colour snippet for a palette on stdout.
+#
+# The surfaces are NOT derived from the palette's own `background`: Obsidian then reads near-black
+# (#070d0b on rolex) while the file manager, every GTK app and the generated theme sit on the lifted
+# tone that theme-gtk-recolor lands on (~#2b4842). Two windows side by side then disagree, which is
+# exactly the "Obsidian is too dark, not like Thunar" complaint.
+#
+# So the reference is what Thunar actually paints:
+#   theme_base_color  -> the file view  -> --qs-surface (editor), then darkened
+#   theme_bg_color    -> sidebar/toolbar -> --qs-chrome (nav, tabs, status bar), then darkened
+#   borders           -> --qs-edge
+# Read from the GTK theme in use (the generated qs-<palette> copy, or a packaged theme such as
+# Nordic). The darkening exists because Thunar's base tone is a mid-luminance wall: fine behind a
+# grid of icons, tiring behind text you read for an hour. `darker_background` is the floor, so the
+# result never falls back to the near-black palette `background` he already rejected. Everything
+# else - card tone, hover, selection, the heatmap ramp - is mixed from those two surfaces plus the
+# palette's own accents, so every palette keeps its character while sharing one shape of ladder.
+# ============================================================
+
+import colorsys
+import os
+import re
+import sys
+
+HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
+def die(msg):
+    print(f"theme-obsidian: {msg}", file=sys.stderr)
+    return 2
+
+
+# ---------------------------------------------------------------- colour helpers
+
+
+def to_rgb(h):
+    h = h.lstrip("#")
+    return tuple(int(h[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
+
+
+def to_hex(rgb):
+    return "#" + "".join("%02x" % max(0, min(255, round(c * 255))) for c in rgb)
+
+
+def mix(a, b, t):
+    """Linear blend: t=0 gives a, t=1 gives b."""
+    ra, rb = to_rgb(a), to_rgb(b)
+    return to_hex(tuple(ra[i] + (rb[i] - ra[i]) * t for i in range(3)))
+
+
+def lum(h):
+    """WCAG relative luminance (gamma corrected: this one is for contrast, not for sorting)."""
+    def ch(c):
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+    r, g, b = to_rgb(h)
+    return 0.2126 * ch(r) + 0.7152 * ch(g) + 0.0722 * ch(b)
+
+
+def contrast(a, b):
+    la, lb = lum(a), lum(b)
+    hi, lo = max(la, lb), min(la, lb)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def lab(h):
+    """CIE Lab, for 'does this step actually look different' (contrast cannot answer that)."""
+    r, g, b = to_rgb(h)
+
+    def inv(c):
+        return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+    r, g, b = inv(r), inv(g), inv(b)
+    x = (0.4124 * r + 0.3576 * g + 0.1805 * b) / 0.95047
+    y = 0.2126 * r + 0.7152 * g + 0.0722 * b
+    z = (0.0193 * r + 0.1192 * g + 0.9505 * b) / 1.08883
+
+    def f(t):
+        return t ** (1 / 3) if t > 0.008856 else 7.787 * t + 16 / 116
+    fx, fy, fz = f(x), f(y), f(z)
+    return (116 * fy - 16, 500 * (fx - fy), 200 * (fy - fz))
+
+
+def delta_e(a, b):
+    la, lb = lab(a), lab(b)
+    return sum((la[i] - lb[i]) ** 2 for i in range(3)) ** 0.5
+
+
+def hsl(h):
+    r, g, b = to_rgb(h)
+    return colorsys.rgb_to_hls(r, g, b)  # (hue, lightness, saturation)
+
+
+# ---------------------------------------------------------------- inputs
+
+
+def parse_palette(path):
+    values = {}
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            m = re.match(r'\s*([a-z_]+)\s*=\s*"([^"]*)"', line)
+            if m:
+                values[m.group(1)] = m.group(2).strip().lower()
+    return values
+
+
+def gtk_defines(gtk_dir):
+    """theme_base_color / theme_bg_color / borders out of a GTK3 theme, if it is a real theme."""
+    out = {}
+    css = os.path.join(gtk_dir, "gtk-3.0", "gtk.css") if gtk_dir else ""
+    if not css or not os.path.isfile(css):
+        return out
+    want = {"theme_base_color": "base", "theme_bg_color": "bg", "borders": "edge"}
+    try:
+        with open(css, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                m = re.match(r"\s*@define-color\s+([a-z_]+)\s+(#[0-9a-fA-F]{6})\s*;", line)
+                if m and m.group(1) in want:
+                    out.setdefault(want[m.group(1)], m.group(2).lower())
+                if len(out) == 3:
+                    break
+    except OSError:
+        return {}
+    return out
+
+
+# ---------------------------------------------------------------- the ladder
+
+
+def best_of(candidates, bg, floor=4.5):
+    """First candidate that clears the contrast floor, else the highest-contrast one."""
+    usable = [c for c in candidates if c and HEX.match(c)]
+    if not usable:
+        return None
+    for c in usable:
+        if contrast(c, bg) >= floor:
+            return c
+    return max(usable, key=lambda c: contrast(c, bg))
+
+
+def brightest(roles, palette):
+    """The palette tone the heat ramp climbs to: the brightest colour it owns in the given roles."""
+    usable = [(lum(palette[r]), palette[r]) for r in roles if HEX.match(palette.get(r, ""))]
+    if not usable:
+        return palette.get("accent", "#ffffff")
+    return max(usable)[1]
+
+
+def fade_toward(fg, bg, floor, start):
+    """Move `fg` toward `bg` as far as `start` allows, but never below `floor` contrast.
+
+    Faint text is meant to be quiet, not unreadable: a fixed blend ratio gave 2.7:1 on palettes whose
+    surface is mid-luminance (gruvbox, nord), which is below what any label can survive.
+    """
+    t = start
+    while t > 0.02 and contrast(mix(fg, bg, t), bg) < floor:
+        t -= 0.03
+    return mix(fg, bg, max(t, 0.0))
+
+
+def tint_to_delta(base, tint, surface, target=13.0):
+    """Mix `tint` into `base` until the result sits ~`target` delta-E away from the page.
+
+    A fixed mix ratio cannot work across palettes: gruvbox's accent is a cream, so the same 0.25 tint
+    landed delta-E 20 (a card that looks like a different theme), while rolex's dark accent landed 12.5.
+    """
+    best = (1e9, 0.0)
+    for i in range(1, 81):
+        t = i / 100.0
+        d = abs(delta_e(mix(base, tint, t), surface) - target)
+        if d < best[0]:
+            best = (d, t)
+    return mix(base, tint, best[1])
+
+
+def build(palette, gtk):
+    bg = palette["background"]
+    fg = palette["foreground"]
+    darker = palette.get("darker_background") or mix(bg, "#000000", 0.45)
+    accent = palette.get("accent") or fg
+    muted_role = palette.get("muted") or mix(bg, fg, 0.35)
+
+    def role(name, *fallbacks):
+        for r in (name,) + fallbacks:
+            v = palette.get(r, "")
+            if HEX.match(v):
+                return v
+        return None
+
+    # ---- surfaces: Thunar's own tones, pulled toward the palette's darkest step
+    #
+    # Straight Thunar values were too pale to write on for hours: #2b4842 fills the whole editor, and a
+    # mid-luminance wall of green-grey behind body text reads washed out ("kinda pale, susah dibaca
+    # lama"). Thunar's own window only *looks* darker because big parts of it - sidebar frame, borders,
+    # headerbar - sit on the #182c27 family, not on theme_base_color.
+    #
+    # So the ladder is Thunar's, shifted toward `darker_background` by DARKEN. 0.0 = exactly Thunar,
+    # 1.0 = the palette's near-black (the version he rejected as "terlalu gelap"). 0.35 keeps the hue,
+    # takes body text from 7.5:1 to ~10:1, and stays recognisably the same desktop as the file manager.
+    DARKEN = 0.35
+    gtk_base = gtk.get("base") or role("lighter_background", "selection") or mix(bg, fg, 0.12)
+    gtk_chrome = gtk.get("bg") or mix(gtk_base, fg, 0.05)
+    surface = mix(gtk_base, darker, DARKEN)
+    # Sidebar / tabs / status bar: one clear step BELOW the page. That is Obsidian's own dark
+    # convention (background-secondary under background-primary) and it is what he reads in Thunar,
+    # whose frame, borders and headerbar sit on the darker family. Mixed toward the same floor, then
+    # searched up until the step is ~5.5 delta-E: one ratio gave delta-E 4 on rolex and 2 on gruvbox.
+    chrome = mix(gtk_chrome, darker, DARKEN)
+    if delta_e(surface, chrome) < 5.5:
+        best = (1e9, chrome)
+        for i in range(int(round(DARKEN * 100)), 101):
+            t = i / 100.0
+            cand = mix(gtk_chrome, darker, t)
+            d = abs(delta_e(surface, cand) - 5.5)
+            if d < best[0]:
+                best = (d, cand)
+        chrome = best[1]
+    edge = gtk.get("edge") or mix(chrome, bg, 0.55)
+    if delta_e(edge, surface) < 5:
+        edge = mix(surface, bg, 0.5)
+
+    # Cards must read as cards on a mid-luminance page: tinting only with the accent gave delta-E 8.9
+    # from the page, which the user reads as "the callouts melt into the background". A small lift
+    # toward the foreground first, then an accent tint tuned to ~13 delta-E, so the step is the same
+    # size on every palette instead of following how light that palette's accent happens to be.
+    card = tint_to_delta(mix(chrome, fg, 0.08), accent, surface)
+    card_alt = mix(chrome, fg, 0.05)
+    hover = mix(surface, accent, 0.20)
+    active = mix(surface, accent, 0.38)
+    edge_hover = mix(edge, accent, 0.45)
+    edge_focus = best_of([role("border_active"), role("bright_cyan"), accent], surface, 3.0) or accent
+
+    # ---- text
+    text = best_of([fg, palette.get("bright_foreground")], surface, 7.0) or fg
+    text_muted = fade_toward(fg, surface, 4.5, 0.30)
+    text_faint = fade_toward(fg, surface, 3.4, 0.48)
+    on_accent = darker
+
+    # headline colours, lifted to the bright variant when the normal one is too dim for the surface
+    heads = []
+    for name, bright in (("red", "bright_red"), ("green", "bright_green"), ("yellow", "bright_yellow"),
+                         ("blue", "bright_blue"), ("magenta", "bright_magenta"), ("magenta", "bright_magenta")):
+        cand = role(bright) or role(name)
+        heads.append(best_of([cand, role(name)], surface, 4.5) or text)
+
+    link = best_of([role("bright_cyan"), role("cyan"), accent], surface, 4.5) or accent
+    link_hover = mix(link, "#ffffff", 0.25)
+    external = best_of([role("bright_blue"), role("blue")], surface, 4.5) or link
+    unresolved = best_of([role("bright_yellow"), role("yellow")], surface, 4.5) or link
+
+    warn = best_of([role("bright_red"), role("red")], surface, 4.5) or text
+    ok = best_of([role("bright_green"), role("green")], surface, 4.5) or text
+    code = best_of([role("cyan"), role("bright_cyan")], surface, 4.5) or accent
+
+    # ---- heatmap ramp: surface -> the palette's brightest cooling/accent tone
+    # Cyan family first: it is the "activity" colour in every palette here (rolex bright_cyan is the
+    # mint he already had, gruvbox green, nord frost). Falling back to the bare brightest role picked
+    # a cream for nord and turned the heatmap into a beige grid.
+    top = ""
+    for family in (("bright_cyan", "cyan"), ("bright_blue", "blue"), ("accent",)):
+        cand = brightest(family, palette)
+        if cand and delta_e(cand, surface) >= 25:
+            top = cand
+            break
+    if not top:
+        top = mix(accent, fg, 0.45)
+    heat = [
+        mix(surface, darker, 0.55),
+        mix(surface, top, 0.25),
+        mix(surface, top, 0.48),
+        mix(surface, top, 0.72),
+        top,
+    ]
+    heat_text = darker if contrast(darker, heat[4]) >= 4.5 else "#000000"
+
+    return {
+        "darken": f"{DARKEN:.0%}",
+        "surface": surface, "chrome": chrome, "card": card, "card_alt": card_alt, "edge": edge,
+        "edge_hover": edge_hover, "edge_focus": edge_focus, "hover": hover, "active": active,
+        "text": text, "text_muted": text_muted, "text_faint": text_faint, "on_accent": on_accent,
+        "bg": bg, "fg": fg, "darker": darker, "accent": accent, "muted": muted_role,
+        "heads": heads, "link": link, "link_hover": link_hover, "external": external,
+        "unresolved": unresolved, "warn": warn, "ok": ok, "code": code,
+        "heat": heat, "heat_text": heat_text,
+        "yellow": best_of([role("bright_yellow"), role("yellow")], card, 4.5) or text,
+        "green": best_of([role("bright_green"), role("green")], card, 4.5) or text,
+        "cyan": best_of([role("bright_cyan"), role("cyan")], card, 4.5) or text,
+        "magenta": best_of([role("bright_magenta"), role("magenta")], card, 4.5) or text,
+        "blue": best_of([role("bright_blue"), role("blue")], card, 4.5) or text,
+        "red": best_of([role("bright_red"), role("red")], card, 4.5) or text,
+        "selection": active,
+        "graph_line": mix(edge, surface, 0.35),
+        "scroll": mix(edge, accent, 0.35),
+    }
+
+
+CSS = """/* Generated by theme-apply - palette: {name}. Do not edit, this file is rewritten on every switch.
+ *
+ * Surfaces start from the GTK theme the file manager paints (Thunar) and are pulled {darken} of the
+ * way toward the palette's darkest step, because Thunar's own theme_base_color is a mid-luminance
+ * wall that is tiring to write on for hours:
+ *   page/editor  {surface}  = theme_base_color, darkened {darken}
+ *   panels/nav   {chrome}  = theme_bg_color, darkened {darken}
+ *   borders      {edge}  = borders, untouched
+ * Cards, hover, selection and the heatmap ramp are mixed from those plus the palette's own accent,
+ * so Obsidian and Thunar read as one desktop instead of two.
+ */
+.theme-dark, .theme-light {{
+  /* ---- surfaces (qs- prefix: read by the Home dashboard too) */
+  --qs-surface: {surface};
+  --qs-chrome: {chrome};
+  --qs-card: {card};
+  --qs-card-alt: {card_alt};
+  --qs-edge: {edge};
+  --qs-heat-0: {heat0};
+  --qs-heat-1: {heat1};
+  --qs-heat-2: {heat2};
+  --qs-heat-3: {heat3};
+  --qs-heat-4: {heat4};
+  --qs-heat-text: {heat_text};
+
+  --background-primary: var(--qs-surface);
+  --background-primary-alt: var(--qs-surface);
+  --background-secondary: var(--qs-chrome);
+  --background-secondary-alt: {card_alt};
+  --background-modifier-border: var(--qs-edge);
+  --background-modifier-border-hover: {edge_hover};
+  --background-modifier-border-focus: {edge_focus};
+  --background-modifier-form-field: {card_alt};
+  --background-modifier-hover: {hover};
+  --background-modifier-active-hover: {active};
+  --background-modifier-success: {ok};
+  --background-modifier-error: {warn};
+  --background-modifier-error-hover: {warn};
+
+  --text-normal: {text};
+  --text-muted: {text_muted};
+  --text-faint: {text_faint};
+  --text-on-accent: {on_accent};
+  --text-accent: {link};
+  --text-accent-hover: {link_hover};
+  --text-selection: {selection};
+  --text-highlight-bg: {highlight};
+  --text-error: {warn};
+  --text-error-hover: {warn};
+  --text-success: {ok};
+
+  --interactive-normal: {card_alt};
+  --interactive-hover: {hover};
+  --interactive-accent: {accent};
+  --interactive-accent-hover: {edge_focus};
+
+  --link-color: {link};
+  --link-color-hover: {link_hover};
+  --link-external-color: {external};
+  --link-external-color-hover: {link_hover};
+  --link-unresolved-color: {unresolved};
+
+  --tag-color: {yellow};
+  --tag-background: {tag_bg};
+  --tag-color-hover: {yellow};
+
+  --code-background: {card_alt};
+  --code-normal: {text};
+  --code-comment: {text_faint};
+  --code-function: {green};
+  --code-keyword: {magenta};
+  --code-string: {yellow};
+  --code-value: {blue};
+
+  --blockquote-border-color: {edge_focus};
+  --blockquote-color: {text_muted};
+  --hr-color: var(--qs-edge);
+  --bold-color: {text};
+  --italic-color: {text_muted};
+
+  --h1-color: {h1};
+  --h2-color: {h2};
+  --h3-color: {h3};
+  --h4-color: {h4};
+  --h5-color: {h5};
+  --h6-color: {h6};
+
+  --checkbox-color: {edge_focus};
+  --checkbox-color-hover: {accent};
+  --checkbox-border-color: {edge_hover};
+  --checkbox-marker-color: {on_accent};
+  --checklist-done-color: {text_faint};
+
+  --graph-node: {edge_focus};
+  --graph-node-focused: {link};
+  --graph-node-tag: {cyan};
+  --graph-node-attachment: {green};
+  --graph-line: {graph_line};
+  --graph-text: {text};
+
+  --titlebar-background: var(--qs-chrome);
+  --titlebar-background-focused: var(--qs-chrome);
+  --titlebar-text-color: {text_muted};
+  --titlebar-text-color-focused: {text};
+
+  --tab-background-active: var(--qs-surface);
+  --tab-text-color: {text_muted};
+  --tab-text-color-active: {text};
+  --tab-outline-color: var(--qs-edge);
+
+  --ribbon-background: var(--qs-chrome);
+  --ribbon-background-collapsed: var(--qs-chrome);
+
+  --scrollbar-bg: transparent;
+  --scrollbar-thumb-bg: {scroll};
+  --scrollbar-active-thumb-bg: {edge_focus};
+
+  --nav-item-color: {text};
+  --nav-item-color-hover: {text};
+  --nav-item-color-active: {text};
+  --nav-item-background-hover: {hover};
+  --nav-item-background-active: {active};
+  --nav-collapse-icon-color: {text_faint};
+
+  --divider-color: var(--qs-edge);
+  --status-bar-background: var(--qs-chrome);
+  --status-bar-text-color: {text_muted};
+
+  --font-text-size: 17px;
+}}
+
+/* ---- callouts: cards sit one step above the page, the stem carries the palette accent */
+.callout {{
+  background-color: var(--qs-card);
+  border: 1px solid var(--qs-edge);
+  border-left: 3px solid {cyan};
+  border-radius: 12px;
+}}
+.callout-title {{ color: {text}; font-weight: 600; }}
+.callout[data-callout="summary"] {{ border-left-color: {yellow}; }}
+.callout[data-callout="example"] {{ border-left-color: {cyan}; }}
+.callout[data-callout="todo"] {{ border-left-color: {green}; }}
+.callout[data-callout="tip"] {{ border-left-color: {green}; }}
+.callout[data-callout="warning"] {{ border-left-color: {yellow}; }}
+.callout[data-callout="danger"] {{ border-left-color: {red}; }}
+.callout[data-callout="quote"] {{ border-left-color: {magenta}; }}
+.callout[data-callout="info"] {{ border-left-color: {blue}; }}
+
+/* ---- Home dashboard */
+.dashboard h1 {{ color: {text}; }}
+.dashboard h2 {{ color: {yellow}; }}
+.dashboard table {{ border-color: var(--qs-edge); }}
+.dashboard thead th {{ background: {card_alt}; color: {green}; }}
+.vault-clock div {{ text-align: center; }}
+
+/* ---- editor chrome */
+.cm-header-1, .markdown-rendered h1 {{ color: var(--h1-color); }}
+.cm-header-2, .markdown-rendered h2 {{ color: var(--h2-color); }}
+.cm-header-3, .markdown-rendered h3 {{ color: var(--h3-color); }}
+.cm-header-4, .markdown-rendered h4 {{ color: var(--h4-color); }}
+.cm-header-5, .markdown-rendered h5 {{ color: var(--h5-color); }}
+.cm-header-6, .markdown-rendered h6 {{ color: var(--h6-color); }}
+.markdown-rendered code {{ color: {code}; }}
+.cm-s-obsidian span.cm-keyword {{ color: {magenta}; }}
+.cm-s-obsidian span.cm-string {{ color: {yellow}; }}
+.cm-s-obsidian span.cm-number {{ color: {yellow}; }}
+.cm-s-obsidian span.cm-comment {{ color: {text_faint}; }}
+.cm-s-obsidian span.cm-operator {{ color: {blue}; }}
+.cm-s-obsidian span.cm-def {{ color: {blue}; }}
+.markdown-rendered a {{ color: var(--link-color); }}
+.markdown-rendered blockquote {{ border-left-color: var(--blockquote-border-color); }}
+.workspace-leaf.mod-active .workspace-leaf-header-title {{ color: var(--interactive-accent); }}
+.nav-file-title.is-active {{ color: {link}; }}
+.search-result-file-title {{ color: {link}; }}
+"""
+
+
+def main():
+    if len(sys.argv) < 2 or len(sys.argv) > 3:
+        return die("usage: theme-obsidian <colors.toml> [gtk-theme-dir]")
+    palette_path = sys.argv[1]
+    gtk_dir = sys.argv[2] if len(sys.argv) == 3 else ""
+    try:
+        palette = parse_palette(palette_path)
+    except OSError as exc:
+        return die(f"cannot read {palette_path}: {exc}")
+    if not HEX.match(palette.get("background", "")) or not HEX.match(palette.get("foreground", "")):
+        return die(f"{palette_path} has no usable background/foreground")
+
+    gtk = gtk_defines(gtk_dir)
+    if not gtk.get("base"):
+        print(f"theme-obsidian: no GTK theme at {gtk_dir!r}, surfaces derived from the palette",
+              file=sys.stderr)
+
+    c = build(palette, gtk)
+    name = os.path.basename(os.path.dirname(os.path.abspath(palette_path)))
+    heat = c["heat"]
+
+    out = CSS.format(
+        name=name, **c,
+        heat0=heat[0], heat1=heat[1], heat2=heat[2], heat3=heat[3], heat4=heat[4],
+        highlight=mix(c["surface"], c["yellow"], 0.22),
+        tag_bg=mix(c["surface"], c["yellow"], 0.14),
+        h1=c["heads"][0], h2=c["heads"][1], h3=c["heads"][2],
+        h4=c["heads"][3], h5=c["heads"][4], h6=c["heads"][5],
+    )
+    sys.stdout.write(out)
+
+    # Report the pairs that decide whether this reads as one desktop (stderr so the CSS stays clean).
+    print(f"theme-obsidian: {name} surface={c['surface']} chrome={c['chrome']} card={c['card']} "
+          f"edge={c['edge']}", file=sys.stderr)
+    print(f"theme-obsidian: text {contrast(c['text'], c['surface']):.2f}:1, muted "
+          f"{contrast(c['text_muted'], c['surface']):.2f}:1, faint "
+          f"{contrast(c['text_faint'], c['surface']):.2f}:1, link "
+          f"{contrast(c['link'], c['surface']):.2f}:1, card-vs-page deltaE "
+          f"{delta_e(c['card'], c['surface']):.1f}, heat4 {heat[4]} "
+          f"(on-cell text {contrast(c['heat_text'], heat[4]):.2f}:1)", file=sys.stderr)
+    print("theme-obsidian: heat ladder " +
+          " -> ".join(f"{h}(dE {delta_e(h, c['surface']):.0f})" for h in heat), file=sys.stderr)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
