@@ -24,6 +24,64 @@ mkdir -p "$state_dir"
 # same situation as an empty state: nothing to draw. Let theme-apply pick a valid background.
 recorded="$(cat "$state_dir/wallpaper" 2>/dev/null || true)"
 
+# ---------------------------------------------------------------- obsidian, on a fresh install
+#
+# The Obsidian colour snippet lives INSIDE the synced vault, so on a reinstall it is not here yet when
+# this script runs: Syncthing still has to deliver it, and Obsidian can be opened before that with a
+# stock appearance.json. The desktop would then be on the seeded palette while the editor holds
+# whatever palette last synced from another device - the two windows disagree, which reads as "the
+# theme broke again".
+#
+# So watch for the vault (bounded, in the background, this never blocks the session) and re-apply the
+# CURRENT palette once when the snippet is missing or stamped with a different palette. theme-apply
+# also re-enables the snippet in appearance.json, so a stock file repairs itself too. On a normal
+# login the stamp already matches and nothing is started.
+vault_dir="$HOME/Obsidian Vault/Oscar Faldi"
+user_dir_palettes="$HOME/.local/share/qs-palettes-user"
+snippet="$vault_dir/.obsidian/snippets/qs-theme.css"
+
+# theme-apply writes `- palette: <name>.` on line 1; that line is the only record of which palette
+# the editor is currently painted in.
+palette_stamp() {
+    sed -n '1s/.*palette: \([A-Za-z0-9_.-]*\)\..*/\1/p' "$snippet" 2>/dev/null
+}
+
+if [[ ! -f "$snippet" || "$(palette_stamp)" != "$(theme-current)" ]]; then
+    (
+        # Up to 10 min: the first sync after a reinstall has to reconnect and pull the whole vault.
+        for _ in $(seq 1 120); do
+            sleep 5
+            [[ -d "$vault_dir/.obsidian" ]] && break
+        done
+        [[ -d "$vault_dir/.obsidian" ]] || exit 0
+
+        # Give a half-delivered file a moment to settle before deciding it carries the wrong palette.
+        sleep 5
+
+        # The snippet's stamp is the palette the notes were last painted in, and after a reinstall that
+        # is the state worth restoring: `state/current` is local and comes back as the seeded palette
+        # (gruvbox), so trusting it would move his desktop to gruvbox and repaint the notes to match,
+        # instead of bringing back what he was actually using. It only wins when the palette still
+        # exists, otherwise the active one is used.
+        now="$(theme-current)"
+        have="$(palette_stamp)"
+        want="$now"
+        if [[ -n "$have" ]] && { [[ -d "/etc/qs-palettes/$have" ]] || [[ -f "$user_dir_palettes/$have/colors.toml" ]]; }; then
+            want="$have"
+        fi
+
+        # Apply when the file on disk and the recorded palette do not both already agree on `want`:
+        # a missing/stale snippet has to be rewritten, AND a desktop still on the seeded palette has
+        # to be moved to the one the notes were last painted in. Both are the same command.
+        if [[ "$now" != "$want" || "$have" != "$want" ]]; then
+            echo "$(date '+%F %T') applying $want (state $now, snippet '${have}')"
+            theme-apply "$want" --no-rotate
+        else
+            echo "$(date '+%F %T') $want already in place, nothing to do"
+        fi
+    ) >>"$state_dir/obsidian-sync.log" 2>&1 &
+fi
+
 if [[ -s "$state_dir/theme.json" && -n "$recorded" && -f "$recorded" ]]; then
     exit 0
 fi
