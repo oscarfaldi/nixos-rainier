@@ -38,6 +38,8 @@
         <property name="last-details-view-column-widths" type="string" value="250,180,240,300,50,50,50,50,380,50,50,100,50,250"/>
 
         <!-- Behavior & Tweaks -->
+        <!-- Expandable folders: the list view expands a folder in place instead of opening it (Thunar 4.20) -->
+        <property name="misc-expandable-folders" type="bool" value="true"/>
         <property name="misc-thumbnail-mode" type="string" value="THUNAR_THUMBNAIL_MODE_ALWAYS"/>
         <property name="misc-date-style" type="string" value="THUNAR_DATE_STYLE_CUSTOM"/>
         <property name="misc-single-click" type="bool" value="false"/>
