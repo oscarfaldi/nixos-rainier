@@ -90,6 +90,9 @@
     fd
     tree
 
+    freerdp    # RDP fallback (wlfreerdp, Wayland-native)
+    remmina    # GUI RDP client
+
     jq
     yq-go
 
