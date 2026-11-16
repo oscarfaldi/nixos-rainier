@@ -1,5 +1,5 @@
 [remmina]
-name=glacier
+name=nixos-glacier
 protocol=VNC
 server=10.10.10.10:5900
 colordepth=32

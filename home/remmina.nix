@@ -8,7 +8,7 @@
   #
   # Remmina is protocol agnostic, so both VMs land in the same connection list:
   #
-  #   glacier         -> VNC to 10.10.10.10:5900, the QEMU display Unraid already runs
+  #   nixos-glacier   -> VNC to 10.10.10.10:5900, the QEMU display Unraid already runs
   #   windows-glacier -> RDP to 10.10.10.175, the RDP server built into Windows
   #
   # The NixOS VM gets VNC rather than RDP on purpose. Its RDP server would be xrdp, an
@@ -35,7 +35,7 @@
       fi
     }
 
-    seed glacier.remmina ${./remmina/glacier.remmina}
+    seed nixos-glacier.remmina ${./remmina/nixos-glacier.remmina}
     seed windows-glacier.remmina ${./remmina/windows-glacier.remmina}
   ";
 }
