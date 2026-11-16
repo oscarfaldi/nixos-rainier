@@ -1,0 +1,8 @@
+[remmina]
+name=glacier
+protocol=VNC
+server=10.10.10.10:5900
+colordepth=32
+viewmode=1
+disableclipboard=0
+group=Cascade
