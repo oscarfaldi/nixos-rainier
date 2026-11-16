@@ -1,0 +1,12 @@
+[remmina]
+name=windows-glacier
+protocol=RDP
+server=10.10.10.175
+username=Oscar Faldi
+domain=
+colordepth=32
+quality=9
+cert_ignore=1
+disablepasswordstoring=0
+window_maximize=1
+group=Cascade
