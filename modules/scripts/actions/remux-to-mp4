@@ -156,6 +156,8 @@ if [[ "$total" -eq 0 ]]; then
         "Remux to MP4" \
         "No supported videos found."
 
+    SCRIPT_FINISHED=1
+
     exit 0
 fi
 
@@ -175,7 +177,39 @@ session_start=$(date +%s)
 
 tmp=""
 ffmpeg_log=""
+SCRIPT_FINISHED=0
 
+
+# Filename length is a hard per-component limit on this storage (255 bytes on the CIFS mount,
+# counted in BYTES - a Japanese glyph costs three). Temp names stay SHORT on their own, and the final
+# name is measured before the encoder starts: `mv` inside the success branch runs under `set -e`, so
+# an over-long output name used to abort the script with no terminal status frame - which left the
+# progress window on WORKING forever, with a CANCEL chip that could never do anything.
+MAX_NAME_BYTES=255
+
+name_bytes() {
+    local LC_ALL=C
+
+    printf '%s' "${#1}"
+}
+
+# Any exit that was not planned leaves a terminal state behind, so the window can always be closed.
+# The intentional ends of the script set SCRIPT_FINISHED=1 first.
+abort_job() {
+    local rc=$?
+
+    [[ "${SCRIPT_FINISHED:-0}" -eq 1 ]] && return 0
+
+    echo
+    echo "[ABORTED] the run stopped at [$JOB_INDEX/$JOB_TOTAL] (exit $rc)."
+    echo "Source files were not deleted."
+
+    JOB_STATE="failed"
+    JOB_MESSAGE="aborted at [$JOB_INDEX/$JOB_TOTAL] - see log"
+    job_write
+
+    return 0
+}
 
 cleanup() {
     echo
@@ -186,11 +220,11 @@ cleanup() {
     echo
 
     if [[ -n "$tmp" && -f "$tmp" ]]; then
-        rm -f "$tmp"
+        rm -f "$tmp" || true
     fi
 
     if [[ -n "$ffmpeg_log" && -f "$ffmpeg_log" ]]; then
-        rm -f "$ffmpeg_log"
+        rm -f "$ffmpeg_log" || true
     fi
 
     echo "Temporary output removed."
@@ -205,10 +239,13 @@ cleanup() {
     JOB_MESSAGE="cancelled - temporary output removed"
     job_write
 
+    SCRIPT_FINISHED=1
+
     exit 130
 }
 
 trap cleanup INT TERM
+trap abort_job EXIT
 
 # ============================================================
 # Header
@@ -264,7 +301,36 @@ for input in "${files[@]}"; do
     fi
 
     output="${input%.*}-remuxed.mp4"
-    tmp="${output}.remux-tmp.mp4"
+    # The final name is the one that has to fit on the filesystem; measure it in BYTES before
+    # spending GPU time on a file whose output could never be created or moved.
+    output_base="$(basename -- "$output")"
+    output_bytes=$(name_bytes "$output_base")
+
+    if [[ "$output_bytes" -gt "$MAX_NAME_BYTES" ]]; then
+        echo
+        echo "============================================================"
+        echo "[$current/$total] $filename"
+        echo "============================================================"
+        echo "[FAILED] Name is $output_bytes bytes, the filesystem allows $MAX_NAME_BYTES."
+        echo "Shorten the file name and run again."
+        echo "Source file preserved."
+
+        JOB_STATE="failed"
+        JOB_MESSAGE="name too long ($output_bytes bytes) - skipped"
+        job_write
+
+        failed=$((failed + 1))
+
+        tmp=""
+        ffmpeg_log=""
+
+        continue
+    fi
+
+    # Short temp name in the SAME directory: the final name can sit right at the 255-byte
+    # limit, appending a suffix to it is what made cleanup impossible, and another filesystem
+    # would turn the final move into a full copy.
+    tmp="$(dirname -- "$output")/.qs-remux-tmp-$$-$current.mp4"
     ffmpeg_log="${tmp}.log"
 
     # MP4 can only store text subtitles, as mov_text: those are converted so nothing is lost. A bitmap
@@ -301,7 +367,7 @@ for input in "${files[@]}"; do
     fi
 
 
-    rm -f "$tmp" "$ffmpeg_log"
+    rm -f "$tmp" "$ffmpeg_log" || true
 
     echo
     echo "============================================================"
@@ -506,13 +572,13 @@ for input in "${files[@]}"; do
             echo "Exit code: $ffmpeg_exit_code"
         fi
 
-        rm -f "$tmp"
+        rm -f "$tmp" || true
 
         failed=$((failed + 1))
 
     fi
 
-    rm -f "$ffmpeg_log"
+    rm -f "$ffmpeg_log" || true
 
     tmp=""
     ffmpeg_log=""
@@ -618,3 +684,6 @@ else
 fi
 
 job_write
+
+# The run ended on purpose: the EXIT trap must not overwrite this frame.
+SCRIPT_FINISHED=1

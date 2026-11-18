@@ -38,6 +38,12 @@ FloatingWindow {
 
     property string jobTitle: ""
     property string jobState: "running"
+    // A script can die without writing a terminal state (an unguarded `set -e` abort, a segfault,
+    // an OOM kill). The status file then stays `state=running` forever and the card would sit on
+    // WORKING with a CANCEL chip that signals a process group that no longer exists. `pidGone` is
+    // the pid-file probe, `orphaned` is the verdict once the probe says the process is gone.
+    property bool pidGone: false
+    property bool orphaned: false
     property string fileName: ""
     property int fileIndex: 0
     property int fileTotal: 0
@@ -47,12 +53,13 @@ FloatingWindow {
     property string message: ""
     property string logText: ""
 
-    readonly property bool finished: root.jobState === "cancelled" || (root.jobState === "done" && (root.fileTotal <= 0 || root.fileIndex >= root.fileTotal)) || (root.jobState === "failed" && root.fileTotal > 0 && root.fileIndex >= root.fileTotal)
+    readonly property bool finished: root.orphaned || root.jobState === "cancelled" || (root.jobState === "done" && (root.fileTotal <= 0 || root.fileIndex >= root.fileTotal)) || (root.jobState === "failed" && root.fileTotal > 0 && root.fileIndex >= root.fileTotal)
     readonly property bool showUnits: root.fileTotal > 1
     readonly property real doneUnits: root.finished ? root.fileTotal : Math.max(0, root.fileIndex - 1)
     readonly property real unitPercent: root.fileTotal > 0 ? Math.max(0, Math.min(100, root.doneUnits / root.fileTotal * 100)) : 0
-    readonly property color stateColor: root.jobState === "failed" ? root.theme.warning : root.jobState === "cancelled" ? root.secondaryText : root.jobState === "done" ? root.theme.success : root.theme.accent
-    readonly property string stateLabel: root.jobState === "done" ? "DONE" : root.jobState === "failed" ? "FAILED" : root.jobState === "cancelled" ? "CANCELLED" : "WORKING"
+    readonly property color stateColor: (root.orphaned || root.jobState === "failed") ? root.theme.warning : root.jobState === "cancelled" ? root.secondaryText : root.jobState === "done" ? root.theme.success : root.theme.accent
+    readonly property string stateLabel: (root.orphaned || root.jobState === "failed") ? "FAILED" : root.jobState === "done" ? "DONE" : root.jobState === "cancelled" ? "CANCELLED" : "WORKING"
+    readonly property string statusLine: root.jobState === "running" && !root.orphaned && root.message === "" ? ("SPEED " + root.speed + "   ETA " + root.eta) : root.message
 
     screen: Quickshell.screens.length > 0 ? Quickshell.screens[0] : null
     color: root.theme.panel
@@ -99,7 +106,17 @@ FloatingWindow {
             root.closeWindow();
             return;
         }
-        cancelProc.command = ["sh", "-c", 'p=$(cat "$1" 2>/dev/null); [ -n "$p" ] && kill -TERM -"$p" 2>/dev/null; exit 0', "sh", root.statusPath + ".pid"];
+        // Nothing left to signal: the script is already gone. Dismiss the card instead of leaving a
+        // CANCEL chip that can never do anything (the old behaviour: kill on a dead pid silently
+        // failed, the message stayed "Cancelling...", and the window was stuck on screen forever).
+        if (root.pidGone) {
+            root.orphaned = true;
+            root.message = root.message === "" ? "process exited without a final status - see log" : root.message;
+            return;
+        }
+        // TERM the whole group (setsid makes the script pid the group id), then escalate to KILL if it
+        // is still alive after ~5 s: a job that ignores TERM must not leave an unclosable card behind.
+        cancelProc.command = ["sh", "-c", 'p=$(cat "$1" 2>/dev/null) || exit 0; [ -n "$p" ] || exit 0; kill -TERM -"$p" 2>/dev/null; i=0; while [ "$i" -lt 20 ] && kill -0 "$p" 2>/dev/null; do sleep 0.25; i=$((i+1)); done; kill -0 "$p" 2>/dev/null && kill -KILL -"$p" 2>/dev/null; exit 0', "sh", root.statusPath + ".pid"];
         cancelProc.running = true;
         root.message = "Cancelling...";
     }
@@ -114,6 +131,37 @@ FloatingWindow {
                 return;
             statusProc.running = true;
             logProc.running = true;
+            pidProc.running = true;
+        }
+    }
+
+    // Liveness probe for the script itself. Exit 0 = alive, 3 = no pid file yet (not a verdict),
+    // 4 = the pid in the file is gone. A gone pid is a suspicion, not a result: the script may have
+    // written its terminal frame milliseconds before exiting, so the fresh status read gets a moment
+    // to land before the card is declared orphaned.
+    Process {
+        id: pidProc
+        command: ["sh", "-c", 'p=$(cat "$1" 2>/dev/null); [ -n "$p" ] || exit 3; kill -0 "$p" 2>/dev/null || exit 4', "sh", root.statusPath + ".pid"]
+        onExited: (exitCode, exitStatus) => {
+            if (exitCode === 0) {
+                root.pidGone = false;
+            } else if (exitCode === 4 && !root.finished) {
+                root.pidGone = true;
+                if (!orphanWatch.running)
+                    orphanWatch.start();
+            }
+        }
+    }
+
+    Timer {
+        id: orphanWatch
+        interval: 1600
+        repeat: false
+        onTriggered: {
+            if (!root.finished) {
+                root.orphaned = true;
+                root.message = root.message === "" ? "process exited without a final status - see log" : root.message;
+            }
         }
     }
 
@@ -288,7 +336,7 @@ FloatingWindow {
                 }
 
                 Text {
-                    text: root.jobState === "running" ? ("SPEED " + root.speed + "   ETA " + root.eta) : root.message
+                    text: root.statusLine
                     color: root.secondaryText
                     font.family: root.theme.fontFamily
                     font.pixelSize: root.theme.fontSize - 1

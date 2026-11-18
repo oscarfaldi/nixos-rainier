@@ -52,6 +52,7 @@ fi
 
 tmp=""
 ffmpeg_log=""
+BATCH_FINISHED=0
 
 # ============================================================
 # Quickshell job reporting
@@ -92,22 +93,62 @@ job_write() {
     return 0
 }
 
+# Filename length is a hard per-component limit on this storage (255 bytes on the CIFS mount, counted
+# in BYTES - a Japanese glyph costs three). A name that only fits WITHOUT a temp suffix used to make
+# the per-file cleanup `rm -f` fail with ENAMETOOLONG, and `set -e` then killed the batch in the
+# middle of an iteration: no summary, no terminal status frame, and a progress card stuck on WORKING
+# forever. Temp files therefore get a short name of their own, and the final name is measured BEFORE
+# the encoder starts.
+MAX_NAME_BYTES=255
+
+name_bytes() {
+    local LC_ALL=C
+
+    printf '%s' "${#1}"
+}
+
+# Any unexpected exit has to leave a terminal state behind: a status file stuck on running is exactly
+# what makes the job window impossible to close. The normal end of the batch sets BATCH_FINISHED=1
+# first, so this only writes when the script died on its own.
+abort_job() {
+    local rc=$?
+
+    [[ "${BATCH_FINISHED:-0}" -eq 1 ]] && return 0
+
+    echo
+    echo "[ABORTED] the batch stopped at [$JOB_INDEX/$JOB_TOTAL] (exit $rc)."
+
+    JOB_STATE="failed"
+    JOB_MESSAGE="aborted at [$JOB_INDEX/$JOB_TOTAL] - see log"
+    job_write
+
+    return 0
+}
+
 cleanup() {
     echo
     echo
     echo "Interrupted."
 
-    [[ -n "$tmp" && -f "$tmp" ]] && rm -f "$tmp"
-    [[ -n "$ffmpeg_log" && -f "$ffmpeg_log" ]] && rm -f "$ffmpeg_log"
+    if [[ -n "$tmp" && -f "$tmp" ]]; then
+        rm -f "$tmp" || true
+    fi
+
+    if [[ -n "$ffmpeg_log" && -f "$ffmpeg_log" ]]; then
+        rm -f "$ffmpeg_log" || true
+    fi
 
     JOB_STATE="cancelled"
     JOB_MESSAGE="cancelled - temporary output removed"
     job_write
 
+    BATCH_FINISHED=1
+
     exit 130
 }
 
 trap cleanup INT TERM
+trap abort_job EXIT
 
 # ============================================================
 # Scan Files
@@ -185,6 +226,8 @@ if [[ "$total" -eq 0 ]]; then
     JOB_MESSAGE="no video files found"
     job_write
 
+    BATCH_FINISHED=1
+
     exit 0
 fi
 
@@ -245,10 +288,41 @@ for input in "${files[@]}"; do
         done
     fi
 
-    tmp="${output}.nvenc-tmp.mkv"
+    # The final name is the one that has to fit on the filesystem; measure it before spending an
+    # hour of GPU time on a file whose output can never be created.
+    output_base="$(basename -- "$output")"
+    output_bytes=$(name_bytes "$output_base")
+
+    if [[ "$output_bytes" -gt "$MAX_NAME_BYTES" ]]; then
+        echo
+        echo "============================================================"
+        echo "[$current/$total] $filename"
+        echo "============================================================"
+        echo "[FAILED] Name is $output_bytes bytes, the filesystem allows $MAX_NAME_BYTES."
+        echo "Shorten the file name and run the batch again."
+        echo "Source file preserved."
+
+        JOB_STATE="failed"
+        JOB_MESSAGE="name too long ($output_bytes bytes) - skipped"
+        job_write
+
+        failed=$((failed + 1))
+
+        tmp=""
+        ffmpeg_log=""
+
+        continue
+    fi
+
+    # Short temp name in the SAME directory: the final name can sit right at the 255-byte limit and
+    # appending a suffix to it is what made the old cleanup impossible, while a temp file in another
+    # filesystem would turn the final move into a full copy. The find pattern above excludes any name
+    # containing nvenc-tmp, so a stale temp file is never picked up as an input.
+    tmp="$(dirname -- "$output")/.qs-nvenc-tmp-$$-$current.mkv"
     ffmpeg_log="${tmp}.log"
 
-    rm -f "$tmp" "$ffmpeg_log"
+    # This rm runs under `set -e`: a failure here must never abort the batch.
+    rm -f "$tmp" "$ffmpeg_log" || true
 
     echo
     echo "============================================================"
@@ -274,7 +348,7 @@ for input in "${files[@]}"; do
         echo "Source file preserved."
 
         failed=$((failed + 1))
-        rm -f "$tmp" "$ffmpeg_log"
+        rm -f "$tmp" "$ffmpeg_log" || true
 
         tmp=""
         ffmpeg_log=""
@@ -518,11 +592,11 @@ for input in "${files[@]}"; do
             echo "Exit code: $ffmpeg_exit_code"
         fi
 
-        rm -f "$tmp"
+        rm -f "$tmp" || true
         failed=$((failed + 1))
     fi
 
-    rm -f "$ffmpeg_log"
+    rm -f "$ffmpeg_log" || true
 
     tmp=""
     ffmpeg_log=""
@@ -624,3 +698,7 @@ else
 fi
 
 job_write
+
+# The batch ended on purpose: the EXIT trap must not overwrite this frame with an abort.
+BATCH_FINISHED=1
+

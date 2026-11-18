@@ -1005,4 +1005,14 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # Anything that escapes main() (a bad argument, a crash before the transcription loop starts)
+    # would otherwise leave the job window polling a status file that never reaches a terminal
+    # state. Report it, keep the process exit code, and let the window stop on FAILED.
+    try:
+        sys.exit(main())
+    except SystemExit:
+        raise
+    except BaseException as exc:  # noqa: BLE001 - the point is to catch everything
+        job_write(state="failed", message=f"aborted - {type(exc).__name__}")
+        traceback.print_exc()
+        sys.exit(1)
