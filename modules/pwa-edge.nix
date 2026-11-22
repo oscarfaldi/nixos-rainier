@@ -87,7 +87,7 @@ in
 
     (mkPWA {
       name = "Grafana";
-      url = "http://grafana.local:3050/d/rYdddlPWk/node-exporter-full/";
+      url = "http://grafana.local:3050/d/nas-overview/";
       icon = "${config.my.repoPath}/assets/icons/pwa/grafana.svg";
     })
 

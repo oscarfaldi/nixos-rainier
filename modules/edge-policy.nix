@@ -16,10 +16,10 @@
       "MetricsReportingEnabled": false,
 
       "DefaultSearchProviderEnabled": true,
-      "DefaultSearchProviderName": "DuckDuckGo",
-      "DefaultSearchProviderKeyword": "ddg",
-      "DefaultSearchProviderSearchURL": "https://duckduckgo.com/?q={searchTerms}",
-      "DefaultSearchProviderSuggestURL": "https://duckduckgo.com/ac/?q={searchTerms}&type=list",
+      "DefaultSearchProviderName": "Google",
+      "DefaultSearchProviderKeyword": "google",
+      "DefaultSearchProviderSearchURL": "https://www.google.com/search?q={searchTerms}",
+      "DefaultSearchProviderSuggestURL": "https://suggestqueries.google.com/complete/search?client=chrome&q={searchTerms}",
 
       "QuickSearchShowMiniMenu": false,
 

@@ -108,7 +108,7 @@ APPS = {
     "unraid": ["microsoft-edge", "--app=http://server.local:8081/"],
     "torrent": ["microsoft-edge", "--app=http://torrent.local:8080/"],
     "btop": ["ghostty", "-e", "btop"],
-    "grafana": ["microsoft-edge", "--app=http://grafana.local:3050/d/rYdddlPWk/node-exporter-full/"],
+    "grafana": ["microsoft-edge", "--app=http://grafana.local:3050/d/nas-overview/"],
     # LocalSend: the same Exec= as its desktop entry. It is a normal toplevel here, not a floating
     # window - the dashboard owns its geometry like every other app on this screen.
     "localsend": ["localsend_app"],
@@ -133,7 +133,7 @@ APP_IDS = {
     "gmail": "msedge-mail.google.com__-Default",
     "unraid": "msedge-server.local__-Default",
     "torrent": "msedge-torrent.local__-Default",
-    "grafana": "msedge-grafana.local__d_rYdddlPWk_node-exporter-full_-Default",
+    "grafana": "msedge-grafana.local__d_nas-overview_-Default",
     "localsend": "org.localsend.localsend_app",
     "spotify": "spotify",
     # NOT here: btop. It runs inside ghostty, and every terminal window reports the same app-id
