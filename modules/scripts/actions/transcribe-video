@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+"""Generate Indonesian SRT subtitles for one audio or video file with Faster-Whisper."""
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,7 +24,7 @@ from faster_whisper import WhisperModel
 JOB_PATH = os.environ.get("QS_JOB_STATUS", "")
 
 JOB_STATE = {
-    "title": "Transcribe to SRT",
+    "title": "Transcribe ID to SRT",
     "state": "running",
     "file": "",
     "detail": "",
@@ -143,17 +144,23 @@ MEDIA_EXTENSIONS = {
     ".mts",
     ".m2ts",
     ".ts",
+    ".mxf",
     ".m4v",
 
-    # Audio
+    # Audio (podcasts, music, voice notes, audiobooks)
     ".mp3",
+    ".mp2",
     ".wav",
     ".m4a",
+    ".m4b",
     ".flac",
     ".aac",
     ".ogg",
+    ".oga",
     ".opus",
     ".wma",
+    ".aif",
+    ".aiff",
 }
 
 
@@ -508,7 +515,7 @@ def validate_input(argv: list[str]) -> Optional[Path]:
 
     if len(argv) != 2:
         notify(
-            "Subtitle Generation Failed",
+            "Transcription Failed",
             "Select exactly one audio or video file",
         )
         return None
@@ -517,21 +524,21 @@ def validate_input(argv: list[str]) -> Optional[Path]:
 
     if not media_path.exists():
         notify(
-            "Subtitle Generation Failed",
+            "Transcription Failed",
             f"File not found: {media_path.name}",
         )
         return None
 
     if not media_path.is_file():
         notify(
-            "Subtitle Generation Failed",
+            "Transcription Failed",
             f"Not a file: {media_path.name}",
         )
         return None
 
     if media_path.suffix.lower() not in MEDIA_EXTENSIONS:
         notify(
-            "Subtitle Generation Failed",
+            "Transcription Failed",
             f"Unsupported extension: {media_path.suffix}",
         )
         return None
@@ -630,7 +637,7 @@ def run_transcription(media_path: Path) -> int:
 
     print()
     print_separator()
-    print(" TRANSCRIBE VIDEO TO SRT")
+    print(" TRANSCRIBE INDONESIA TO SRT")
     print_separator()
     print()
 
@@ -902,7 +909,7 @@ def run_transcription(media_path: Path) -> int:
         print_separator()
 
         notify(
-            "Subtitle Generation Cancelled",
+            "Transcription Cancelled",
             media_path.name,
         )
 
@@ -952,12 +959,12 @@ def run_transcription(media_path: Path) -> int:
         if srt_path.exists():
 
             print(
-                f"Partial output: "
+                f"Partial SRT: "
                 f"{srt_path.name}"
             )
 
             print(
-                "The partial output file "
+                "The partial subtitle file "
                 "was preserved."
             )
 
@@ -974,7 +981,7 @@ def run_transcription(media_path: Path) -> int:
         print_separator()
 
         notify(
-            "Subtitle Generation Failed",
+            "Transcription Failed",
             f"{media_path.name}: "
             f"{type(exc).__name__}",
         )

@@ -57,6 +57,7 @@ in
     # Python Scripts
     # ------------------------------------------------------------
     (mkPythonScript "transcribe-video")
+    (mkPythonScript "transcribe-video-en")
     (mkPythonScript "dashboard")
   ];
 }

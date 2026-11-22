@@ -424,13 +424,39 @@
   
   <action>
     <icon>applications-multimedia</icon>
-    <name>Transcribe Video to SRT</name>
+    <name>Transcribe Indonesia to SRT</name>
     <submenu>Content Creation</submenu>
     <unique-id>1781935446753343-601</unique-id>
     <command>/home/oscarfaldi/System/.config/quickshell/scripts/qs-job transcribe-video %f</command>
-    <description>Generate Indonesian SRT subtitles using Faster-Whisper</description>
+    <description>Generate Indonesian SRT subtitles with Faster-Whisper</description>
     <range>*</range>
-    <patterns>*.mp4;*.MP4;*.mov;*.MOV;*.mkv;*.MKV;*.webm;*.mts;*.m2ts;*.ts;*.avi;*.mxf;*.m4v</patterns>
+    <patterns>
+        *.mp4;*.MP4;*.mov;*.MOV;*.mkv;*.MKV;*.webm;*.WEBM;*.mts;*.MTS;
+        *.m2ts;*.M2TS;*.ts;*.TS;*.avi;*.AVI;*.mxf;*.MXF;*.m4v;*.M4V;
+        *.mp3;*.MP3;*.wav;*.WAV;*.m4a;*.M4A;*.m4b;*.M4B;*.flac;*.FLAC;
+        *.aac;*.AAC;*.ogg;*.OGG;*.oga;*.OGA;*.opus;*.OPUS;*.wma;*.WMA;
+        *.aif;*.AIF;*.aiff;*.AIFF;*.mp2;*.MP2
+    </patterns>
+    <audio-files/>
+    <video-files/>
+  </action>
+
+  <action>
+    <icon>applications-multimedia</icon>
+    <name>Transcribe English to SRT</name>
+    <submenu>Content Creation</submenu>
+    <unique-id>1781935446753343-603</unique-id>
+    <command>/home/oscarfaldi/System/.config/quickshell/scripts/qs-job transcribe-video-en %f</command>
+    <description>Generate English SRT subtitles with Faster-Whisper</description>
+    <range>*</range>
+    <patterns>
+        *.mp4;*.MP4;*.mov;*.MOV;*.mkv;*.MKV;*.webm;*.WEBM;*.mts;*.MTS;
+        *.m2ts;*.M2TS;*.ts;*.TS;*.avi;*.AVI;*.mxf;*.MXF;*.m4v;*.M4V;
+        *.mp3;*.MP3;*.wav;*.WAV;*.m4a;*.M4A;*.m4b;*.M4B;*.flac;*.FLAC;
+        *.aac;*.AAC;*.ogg;*.OGG;*.oga;*.OGA;*.opus;*.OPUS;*.wma;*.WMA;
+        *.aif;*.AIF;*.aiff;*.AIFF;*.mp2;*.MP2
+    </patterns>
+    <audio-files/>
     <video-files/>
   </action>
 
