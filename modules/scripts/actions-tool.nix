@@ -58,7 +58,7 @@ in
     # ------------------------------------------------------------
     (mkPythonScript "transcribe-video")
     (mkPythonScript "transcribe-video-en")
-    (mkPythonScript "fcctl")
+    (mkPythonScript "filmcraft-control")
     (mkPythonScript "dashboard")
   ];
 }

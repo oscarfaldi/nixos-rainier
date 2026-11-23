@@ -6,18 +6,18 @@ which exports FILMCRAFT_CONTROL_PORT and the token kept in
 ~/.local/share/filmcraft/control.token. The server speaks one JSON object per line and the
 token has to be repeated in every request.
 
-  fcctl info                          project, sequence, playhead, selection
-  fcctl dump                          every clip on every track, compact
-  fcctl run  <command.id> [json]      engine.execute - the 700+ command ids
-  fcctl send <method>     [json]      raw method call (engine.*, ui.*)
-  fcctl commands [substring]          list command ids, optionally filtered
-  fcctl export <path> <start> <end>   h264 render of a range in seconds, waiting for the job
+  filmcraft-control info                          project, sequence, playhead, selection
+  filmcraft-control dump                          every clip on every track, compact
+  filmcraft-control run  <command.id> [json]      engine.execute - the 700+ command ids
+  filmcraft-control send <method>     [json]      raw method call (engine.*, ui.*)
+  filmcraft-control commands [substring]          list command ids, optionally filtered
+  filmcraft-control export <path> <start> <end>   h264 render of a range in seconds, waiting for the job
 
 Examples:
-  fcctl run playhead.set '{"frame": 120}'
-  fcctl run sequence.addEdit '{"time": 1017080064000}'
-  fcctl run graphics.newText '{"text": "Halo", "position": [90, 1500], "size": 110}'
-  fcctl export /tmp/cut.mp4 0 6
+  filmcraft-control run playhead.set '{"frame": 120}'
+  filmcraft-control run sequence.addEdit '{"time": 1017080064000}'
+  filmcraft-control run graphics.newText '{"text": "Halo", "position": [90, 1500], "size": 110}'
+  filmcraft-control export /tmp/cut.mp4 0 6
 """
 
 import json
