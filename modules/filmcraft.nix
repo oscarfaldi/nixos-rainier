@@ -34,6 +34,50 @@ let
 
   seed = ../assets/filmcraft;
 
+  # Loopback port for FilmCraft's JSON-lines control server. It binds 127.0.0.1 only, so the
+  # channel is reachable from this machine (and from an ssh session on it), never from the LAN.
+  controlPort = 9878;
+
+  # The wrapped AppImage. Named `-app` so the public `filmcraft` command below can be the
+  # control-enabled launcher for the same app instead of a second binary colliding in PATH.
+  filmcraftApp = pkgs.appimageTools.wrapType2 {
+    pname = "filmcraft-app";
+    inherit version src;
+
+    extraInstallCommands = ''
+      mkdir -p $out/share
+      install -Dm444 ${contents}/usr/share/applications/ai.storyteller.filmcraft.desktop \
+        $out/share/applications/ai.storyteller.filmcraft.desktop
+      cp -r ${contents}/usr/share/icons $out/share/
+    '';
+  };
+
+  # Launch wrapper, so EVERY entry point - desktop icon, .fcpxml double-click, terminal,
+  # compositor spawn - starts the app with its control channel on. The token is generated once
+  # into the data dir (mode 600) and reused; the app rewrites its own data dir, so this file is
+  # runtime state, not a repo seed.
+  filmcraftLaunch = pkgs.writeShellScriptBin "filmcraft" ''
+    dataDir="''${XDG_DATA_HOME:-$HOME/.local/share}/filmcraft"
+    tokenFile="$dataDir/control.token"
+
+    if [ ! -s "$tokenFile" ]; then
+      mkdir -p "$dataDir"
+      (umask 077; od -An -tx1 -N32 /dev/urandom | tr -d ' \n' >"$tokenFile")
+    fi
+
+    export FILMCRAFT_CONTROL_TOKEN="$(cat "$tokenFile")"
+    export FILMCRAFT_CONTROL_PORT=${toString controlPort}
+    exec ${filmcraftApp}/bin/filmcraft-app "$@"
+  '';
+
+  # The wrapper provides only bin/, so exposing it alone drops the app out of the launcher: the
+  # .desktop file and the icons live in the AppImage package's share/. Join both - the launcher
+  # entry keeps `Exec=filmcraft`, which now resolves to the control-enabled wrapper.
+  filmcraft = pkgs.symlinkJoin {
+    name = "filmcraft";
+    paths = [ filmcraftApp filmcraftLaunch ];
+  };
+
   # .fcpxml is not a registered type (it falls back to application/xml, which opens Edge),
   # so double-clicking a rough cut did nothing useful. Ship a mime type for that extension
   # and a hidden handler entry, then make it the default below.
@@ -77,18 +121,7 @@ in
 
   environment.systemPackages = [
     fcpxmlMime
-
-    (pkgs.appimageTools.wrapType2 {
-      pname = "filmcraft";
-      inherit version src;
-
-      extraInstallCommands = ''
-        mkdir -p $out/share
-        install -Dm444 ${contents}/usr/share/applications/ai.storyteller.filmcraft.desktop \
-          $out/share/applications/ai.storyteller.filmcraft.desktop
-        cp -r ${contents}/usr/share/icons $out/share/
-      '';
-    })
+    filmcraft
   ];
 
   # Seed only when absent: FilmCraft rewrites both files itself, so they must stay real files

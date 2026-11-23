@@ -58,6 +58,7 @@ in
     # ------------------------------------------------------------
     (mkPythonScript "transcribe-video")
     (mkPythonScript "transcribe-video-en")
+    (mkPythonScript "fcctl")
     (mkPythonScript "dashboard")
   ];
 }

@@ -1,0 +1,166 @@
+#!/usr/bin/env python3
+"""Drive a running FilmCraft session over its loopback control channel.
+
+The channel exists because the app is launched through the wrapper in modules/filmcraft.nix,
+which exports FILMCRAFT_CONTROL_PORT and the token kept in
+~/.local/share/filmcraft/control.token. The server speaks one JSON object per line and the
+token has to be repeated in every request.
+
+  fcctl info                          project, sequence, playhead, selection
+  fcctl dump                          every clip on every track, compact
+  fcctl run  <command.id> [json]      engine.execute - the 700+ command ids
+  fcctl send <method>     [json]      raw method call (engine.*, ui.*)
+  fcctl commands [substring]          list command ids, optionally filtered
+  fcctl export <path> <start> <end>   h264 render of a range in seconds, waiting for the job
+
+Examples:
+  fcctl run playhead.set '{"frame": 120}'
+  fcctl run sequence.addEdit '{"time": 1017080064000}'
+  fcctl run graphics.newText '{"text": "Halo", "position": [90, 1500], "size": 110}'
+  fcctl export /tmp/cut.mp4 0 6
+"""
+
+import json
+import os
+import socket
+import sys
+import time
+
+FALLBACK_PORT = 9878
+
+
+def data_dir():
+    base = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+    return os.path.join(base, "filmcraft")
+
+
+def port():
+    return int(os.environ.get("FILMCRAFT_CONTROL_PORT") or FALLBACK_PORT)
+
+
+def token():
+    tok = os.environ.get("FILMCRAFT_CONTROL_TOKEN")
+    if tok:
+        return tok.strip()
+    path = os.path.join(data_dir(), "control.token")
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        sys.exit(f"no control token at {path} - start FilmCraft once so the wrapper creates it")
+
+
+def call(method, params=None, timeout=180, retries=20):
+    """One request/response. Retries while the app is still booting."""
+    last = None
+    for _ in range(retries):
+        try:
+            with socket.create_connection(("127.0.0.1", port()), timeout=timeout) as sock:
+                stream = sock.makefile("rwb")
+                payload = {"token": token(), "method": method, "params": params or {}}
+                stream.write((json.dumps(payload) + "\n").encode())
+                stream.flush()
+                line = stream.readline()
+            reply = json.loads(line or "{}")
+            if isinstance(reply, dict) and "still starting" in str(reply.get("error", "")):
+                time.sleep(1)
+                last = reply
+                continue
+            return reply
+        except OSError as err:
+            last = {"error": str(err)}
+            time.sleep(1)
+    return last if isinstance(last, dict) else {"error": last}
+
+
+def run(command, params=None):
+    return call("engine.execute", {"command": command, "params": params or {}})
+
+
+def show(value):
+    print(json.dumps(value, indent=1, sort_keys=True)[:20000])
+
+
+def clips_of(sequence, kind):
+    return [clip for track in (sequence.get(kind) or []) for clip in (track.get("items") or [])]
+
+
+def do_info():
+    project = run("project.inspect").get("result") or {}
+    sequence = run("sequence.inspect").get("result") or {}
+    state = run("state.inspect").get("result") or {}
+    print("project :", project.get("name"), "| path:", project.get("path"),
+          "| dirty:", project.get("dirty"))
+    settings = sequence.get("settings") or {}
+    print("sequence:", sequence.get("name"), "|", sequence.get("durationFrames"), "frames",
+          "|", settings.get("width"), "x", settings.get("height"),
+          "| fps:", settings.get("frame_rate"))
+    print("clips   :", len(clips_of(sequence, "video")), "video /",
+          len(clips_of(sequence, "audio")), "audio")
+    print("playhead:", state.get("playheads"), "| selection:", state.get("selection"))
+    print("open    :", state.get("open_sequences"))
+    print("history :", (run("history.list").get("result") or {}).get("undo"))
+
+
+def do_dump():
+    sequence = run("sequence.inspect").get("result") or {}
+    settings = sequence.get("settings") or {}
+    print(f"{sequence.get('name')} - {sequence.get('durationFrames')} frames "
+          f"{settings.get('width')}x{settings.get('height')} fps={settings.get('frame_rate')}")
+    for kind in ("video", "audio"):
+        for track in (sequence.get(kind) or []):
+            items = track.get("items") or []
+            print(f"\n[{kind}] {track.get('name')} id={track.get('id')} clips={len(items)}")
+            for clip in items:
+                print("  clip=%s item=%s %r startFrame=%s endFrame=%s dur=%s" % (
+                    clip.get("clip"), clip.get("item"), clip.get("name"),
+                    clip.get("startFrame"), clip.get("endFrame"), clip.get("durationFrames")))
+
+
+def do_commands(needle=""):
+    ids = call("engine.commands").get("result") or []
+    for entry in ids:
+        if isinstance(entry, dict) and needle in entry.get("id", ""):
+            print(f"{entry['id']:<34} {entry.get('label')}  {entry.get('params', '')[:110]}")
+
+
+def do_export(path, start, stop):
+    reply = run("file.exportMedia", {
+        "path": path,
+        "format": "h264",
+        "crf": 26,
+        "audio": True,
+        "range": "custom",
+        "startSeconds": float(start),
+        "endSeconds": float(stop),
+        "wait": True,
+    })
+    show(reply)
+    return reply
+
+
+def main(argv):
+    if not argv:
+        print(__doc__)
+        return 1
+    head, rest = argv[0], argv[1:]
+    if head == "info":
+        do_info()
+    elif head == "dump":
+        do_dump()
+    elif head == "commands":
+        do_commands(rest[0] if rest else "")
+    elif head == "run":
+        show(run(rest[0], json.loads(rest[1]) if len(rest) > 1 else {}))
+    elif head == "send":
+        show(call(rest[0], json.loads(rest[1]) if len(rest) > 1 else {}))
+    elif head == "export":
+        do_export(rest[0], rest[1], rest[2])
+    else:
+        print(__doc__)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
